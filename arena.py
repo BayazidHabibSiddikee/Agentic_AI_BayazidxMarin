@@ -41,8 +41,8 @@ templates = Jinja2Templates(directory=base_path / "templates")
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _load_arena_history(limit: int = 20) -> list:
-    """Load arena's own history."""
-    return database.get_history("arena", limit=limit)
+    """Load Marin's history for the arena context."""
+    return database.get_history("marin", limit=limit)
 
 
 def _load_bayazid_history(limit: int = 20) -> list:

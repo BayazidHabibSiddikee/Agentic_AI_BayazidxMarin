@@ -24,11 +24,7 @@ from bayazid import (
     timer, memory
 )
 from marin import main as marin_main, format_game_context_for_marin
-from arena import (
-    build_marin_arena_prompt, build_bayazid_arena_prompt,
-    _stream_debate, _stream_judge,
-    _load_arena_history, _load_bayazid_history, _format_history_for_context,
-)
+
 from marin_fier import classify, extract_timer_task, extract_topic, extract_quiz_params # Use unified classifier
 from config import UPLOAD_FOLDER, HOST, PORT
 
@@ -283,41 +279,10 @@ async def handle_message(
         error = params.get("error") or message
         return StreamingResponse(explain_error(error), media_type="text/plain")
 
-    # Default: Deep technical chat using the Recursive Master Agent
-    print(f"[Routing] -> MasterAgent Autonomous Loop")
-    from agent_master import MasterAgent
-    queue = asyncio.Queue()
-    
-    loop = asyncio.get_event_loop()
-    def callback(msg):
-        loop.call_soon_threadsafe(queue.put_nowait, msg + "\n")
-        
-    master = MasterAgent(callback=callback)
-    
-    async def master_stream():
-        # Run execute_task in a separate thread because it's synchronous
-        task = asyncio.create_task(asyncio.to_thread(master.execute_task, message))
-        
-        while not task.done():
-            try:
-                msg = await asyncio.wait_for(queue.get(), timeout=0.2)
-                yield msg
-            except asyncio.TimeoutError:
-                continue
-        
-        # Make sure to get anything remaining in queue
-        while not queue.empty():
-            yield await queue.get()
-            
-        # Yield the final result
-        final_result = await task
-        yield "\n" + "="*60 + "\n"
-        yield "  FINAL CONSOLIDATED ANSWER\n"
-        yield "="*60 + "\n\n"
-        yield final_result
-
+    # Default: Direct Bayazid chat
+    print(f"[Routing] -> Bayazid Engine (Direct)")
     return StreamingResponse(
-        master_stream(),
+        bayazid_main(message, image_path=image_path, study_context=study_context),
         media_type="text/plain"
     )
 
@@ -414,25 +379,6 @@ async def generate_quiz_json_endpoint(
     except Exception as e:
         return JSONResponse({"error": str(e), "raw": full_text})
 
-
-# ── ARENA ENDPOINTS ─────────────────────────────────────────────────────
-
-@app.get("/arena", response_class=HTMLResponse)
-async def arena_page(request: Request):
-    return templates.TemplateResponse(request=request, name="arena_chat.html")
-
-@app.post("/arena/debate")
-async def arena_debate(topic: str = Form(...)):
-    async def debate_stream():
-        history = []
-        async for chunk in _stream_debate(topic, history):
-            yield chunk
-    return StreamingResponse(debate_stream(), media_type="text/plain")
-
-@app.post("/arena/judge")
-async def arena_judge(topic: str = Form(...), debate_history: str = Form(...)):
-    history = json.loads(debate_history)
-    return StreamingResponse(_stream_judge(topic, history), media_type="text/plain")
 
 
 # ── SETTINGS & UTILS ─────────────────────────────────────────────────────

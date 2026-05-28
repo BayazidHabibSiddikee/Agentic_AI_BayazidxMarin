@@ -595,35 +595,20 @@ def _strip_md_trail(cmd: str) -> str:
 
 def _convert_heredocs(body: str) -> str:
     """
-    Detect `cat <<EOF > path` heredocs and convert them to Python file-write
-    commands so they actually work when piped through shell stdin.
-
-    Example input in body:
-        cat <<EOF > unique/limoni.py
-        import os
-        print("hello")
-        EOF
-
-    Converted to:
-        python3 -c "import json,sys;open(sys.argv[1],'w').write(json.loads(sys.argv[2]))" unique/limoni.py "import os\nprint(\"hello\")"
+    Detect `cat <<EOF > path` heredocs and convert to a working bash command.
+    Uses stdin piping instead of JSON encoding to avoid shell quoting issues.
     """
     import textwrap
 
     def _replace_heredoc(m):
         target_file = m.group(1).strip()
         heredoc_body = m.group(2)
-        # Strip common leading indentation
-        content = textwrap.dedent(heredoc_body)
-        # JSON-encode for safe passing through shell
-        encoded = json.dumps(content)
-        return (
-            f'python3 -c "import json,sys;open(sys.argv[1],\'w\').write(json.loads(sys.argv[2]))" '
-            f'{target_file} {encoded}'
-        )
+        content = textwrap.dedent(heredoc_body).strip()
+        escaped = content.replace("\\", "\\\\").replace("'", "'\\''")
+        return f"mkdir -p $(dirname '{target_file}') && echo '{escaped}' > '{target_file}'"
 
-    # Match: cat <<EOF > path  ...  EOF  (allow indented EOF)
     pattern = re.compile(
-        r'cat\s+<<\s*EOF\s*>\s*(\S+)\s*\n(.*?)^\s*EOF\s*$',
+        r'cat\s+<<\s*(?:EOF|\'EOF\'|"EOF")?\s*>\s*(\S+)\s*\n(.*?)^\s*(?:EOF|\'EOF\'|"EOF")\s*$',
         re.DOTALL | re.MULTILINE | re.IGNORECASE
     )
     return pattern.sub(_replace_heredoc, body)
@@ -900,7 +885,7 @@ def stop_audio():
 # MAIN ASYNC ENTRY POINT
 # ═══════════════════════════════════════════════════════════════════════════════
 async def main(prompt: str, image_path: str = None, game_context: str = None):
-    from utils.agent_logic import preprocess_input, execute_text_commands
+    from utils.agent_logic import preprocess_input, extract_and_execute_commands
     sentence_buffer = ""
 
     print(f"\n[Marin] Processing input: {prompt[:50]}...")
@@ -934,8 +919,10 @@ async def main(prompt: str, image_path: str = None, game_context: str = None):
         print(f"[Audio] Skipping: {e}")
 
     split_marks = [".", "!", "?", "\n", ",", ";", ":"]
-    
+
     try:
+        # ── PASS 1: Initial response ─────────────────────────────────────
+        full_response = ""
         async for chunk in response(
             enriched_prompt,
             user_vibe=classification.get("user_vibe", "neutral"),
@@ -959,9 +946,9 @@ async def main(prompt: str, image_path: str = None, game_context: str = None):
                 continue
 
             print(chunk, end="", flush=True)
-            # Strip [EXIT ...] lines — tool execution artifacts, not for display
             clean = re.sub(r'\[EXIT[^\]]*\]\s*', '', chunk)
             yield clean
+            full_response += clean
             sentence_buffer += clean
 
             if audio_proc and any(m in chunk for m in split_marks):
@@ -976,6 +963,26 @@ async def main(prompt: str, image_path: str = None, game_context: str = None):
             if len(text) > 3:
                 audio_proc.stdin.write(text.encode("utf-8"))
                 await audio_proc.stdin.drain()
+
+        # ── PASS 2: Execute commands, feed results back ───────────────────
+        cmd_results = extract_and_execute_commands(full_response, BASE_DIR)
+        if cmd_results:
+            yield f"\n\n{cmd_results}\n\n"
+            yield "[Analyzing results...]\n"
+
+            history = load_history(limit=20)
+            follow_messages = [
+                {"role": "system", "content": get_character_prompt("focused")},
+                *history,
+                {"role": "assistant", "content": full_response},
+                {"role": "system", "content": cmd_results},
+                {"role": "user", "content": "Analyze the command output above and give a clear summary."},
+            ]
+
+            client = ollama.AsyncClient()
+            async for chunk in await client.chat(model=MODEL, messages=follow_messages, stream=True, options={"temperature": 0.3}):
+                piece = chunk.message.content if hasattr(chunk, "message") else chunk["message"]["content"]
+                yield piece
 
     finally:
         if audio_proc and audio_proc.stdin:

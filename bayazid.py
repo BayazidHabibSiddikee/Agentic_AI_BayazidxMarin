@@ -639,7 +639,7 @@ async def main(
     study_context: Optional[str] = None,
     use_rag: bool = False, # Default to false
 ) -> AsyncIterator[str]:
-    from utils.agent_logic import preprocess_input, execute_text_commands
+    from utils.agent_logic import preprocess_input, extract_and_execute_commands
     
     # Preprocess using shared logic
     prep = await preprocess_input(user_message, image_path=image_path, rag_enabled=use_rag, agent_name="bayazid")
@@ -687,17 +687,28 @@ async def main(
         messages.append({"role": "user", "content": user_message})
 
     try:
+        # ── PASS 1: Initial response ─────────────────────────────────────
         response_chunks: List[str] = []
         async for chunk in _stream_model(messages):
             response_chunks.append(chunk)
             yield chunk
 
         full_response = "".join(response_chunks)
+
+        # ── PASS 2: Execute commands, feed results back ───────────────────
+        cmd_results = extract_and_execute_commands(full_response, BASE_DIR)
+        if cmd_results:
+            yield f"\n\n{cmd_results}\n\n"
+            yield "[Analyzing results...]\n"
+
+            messages.append({"role": "assistant", "content": full_response})
+            messages.append({"role": "system", "content": cmd_results})
+
+            async for chunk in _stream_model(messages, temperature=0.3):
+                yield chunk
+
         memory.add("user", user_message)
-        memory.add("assistant", full_response)
-        
-        # Execute any commands found in the response
-        execute_text_commands(full_response, BASE_DIR)
+        memory.add("assistant", full_response + ("\n\n" + cmd_results if cmd_results else ""))
 
     except Exception as e:
         yield f"[ERROR] {str(e)}"

@@ -114,6 +114,110 @@ def execute_text_commands(text: str, base_dir: str):
 
     threading.Thread(target=_run, daemon=True).start()
 
+
+def extract_and_execute_commands(text: str, base_dir: str) -> str:
+    """
+    Two-pass agentic helper:
+    1. Detect heredocs (cat <<EOF > path ... EOF) and write files directly
+    2. Extract remaining shell commands and execute them synchronously
+    3. Return formatted results (to be fed back to LLM)
+    """
+    from marin_fier import is_cmd_allowed
+    import textwrap
+
+    results = []
+
+    # ── Step 1: Handle heredocs directly (write files via Python, not shell) ──
+    heredoc_pattern = re.compile(
+        r'(?:^|\n)\s*(mkdir\s+-p\s+\S+\s*&&\s*)?cat\s+<<\s*(?:EOF|\'EOF\'|"EOF")?\s*>\s*(\S+)\s*\n(.*?)^\s*(?:EOF|\'EOF\'|"EOF")\s*$',
+        re.DOTALL | re.MULTILINE | re.IGNORECASE
+    )
+
+    def _write_heredoc(m):
+        mkdir_prefix = m.group(1) or ""
+        target_file = m.group(2).strip()
+        heredoc_body = m.group(3)
+        content = textwrap.dedent(heredoc_body).strip()
+
+        dir_part = os.path.dirname(target_file)
+        if dir_part:
+            os.makedirs(dir_part, exist_ok=True)
+
+        try:
+            with open(target_file, 'w') as f:
+                f.write(content + "\n")
+            results.append(f"$ [heredoc] > {target_file}\n[OK] File written ({len(content)} bytes)")
+        except Exception as e:
+            results.append(f"$ [heredoc] > {target_file}\n[ERROR] {e}")
+
+        return ""
+
+    text = heredoc_pattern.sub(_write_heredoc, text)
+
+    # ── Step 2: Handle simple inline heredocs (cat < path ... EOF without >>)
+    simple_heredoc = re.compile(
+        r'(?:^|\n)\s*(?:mkdir\s+-p\s+\S+\s*&&\s*)?cat\s*<\s*(\S+)\s*\n(.*?)^\s*EOF\s*$',
+        re.DOTALL | re.MULTILINE | re.IGNORECASE
+    )
+
+    def _write_simple_heredoc(m):
+        target_file = m.group(1).strip()
+        heredoc_body = m.group(2)
+        content = textwrap.dedent(heredoc_body).strip()
+
+        dir_part = os.path.dirname(target_file)
+        if dir_part:
+            os.makedirs(dir_part, exist_ok=True)
+
+        try:
+            with open(target_file, 'w') as f:
+                f.write(content + "\n")
+            results.append(f"$ [heredoc] > {target_file}\n[OK] File written ({len(content)} bytes)")
+        except Exception as e:
+            results.append(f"$ [heredoc] > {target_file}\n[ERROR] {e}")
+
+        return ""
+
+    text = simple_heredoc.sub(_write_simple_heredoc, text)
+
+    # ── Step 3: Extract and execute remaining shell commands ───────────────
+    from marin import _TEXT_CMD_PAT, _strip_md_trail, _convert_heredocs
+    body = re.sub(r'```(?:\w*\n)?([\s\S]*?)```', r'\1', text)
+    body = re.sub(r'[^\x20-\x7E\n]', '', body)
+    body = re.sub(r'`([^`\n]+)`', r'\1', body)
+
+    raw_cmds = []
+    for m in _TEXT_CMD_PAT.finditer(body):
+        cmd = _strip_md_trail(m.group(1))
+        if cmd and 'cat' not in cmd[:5]:
+            raw_cmds.append(cmd)
+
+    for cmd in raw_cmds:
+        allowed, reason = is_cmd_allowed(cmd)
+        if not allowed:
+            results.append(f"[BLOCKED] {cmd} — {reason}")
+            continue
+
+        try:
+            r = subprocess.run(
+                cmd, shell=True, capture_output=True, text=True, timeout=30,
+                cwd=base_dir,
+                env={**os.environ, "DISPLAY": os.environ.get("DISPLAY", ":0")},
+            )
+            output = (r.stdout or r.stderr or "(done)").strip()[:2000]
+            exit_code = r.returncode
+            results.append(f"$ {cmd}\n[EXIT {exit_code}] {output}")
+        except subprocess.TimeoutExpired:
+            results.append(f"$ {cmd}\n[TIMEOUT] Command timed out after 30s")
+        except Exception as e:
+            results.append(f"$ {cmd}\n[ERROR] {e}")
+
+    if not results:
+        return ""
+
+    return "[COMMAND EXECUTION RESULTS]\n" + "\n\n".join(results)
+
+
 # ── Unified Preprocessor ─────────────────────────────────────────────────────
 
 async def preprocess_input(user_input: str, image_path: str = None, rag_enabled: bool = False, agent_name: str = "marin") -> Dict[str, Any]:

@@ -548,6 +548,21 @@ header::after {
   letter-spacing: .08em;
   opacity: .7;
 }
+.master-btn {
+  background: var(--j-deep);
+  color: white;
+  border: none;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: .6rem;
+  padding: 4px 10px;
+  border-radius: 3px;
+  cursor: pointer;
+  margin-left: 12px;
+  transition: all .2s;
+  letter-spacing: .05em;
+}
+.master-btn:hover { background: var(--j-primary); color: #000; }
+.master-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .judge-scroll {
   flex: 1;
@@ -643,12 +658,12 @@ header::after {
   </div>
   <div class="header-right">
     <span class="status-pill idle" id="status-pill">IDLE</span>
-    <a href="http://localhost:5070/"
+    <a href="/"
        style="font-family:'Share Tech Mono',monospace;font-size:.65rem;color:#6b728066;text-decoration:none;padding:3px 10px;border:1px solid #ffffff11;border-radius:3px;transition:all .2s"
        onmouseover="this.style.color='#d1d5db'" onmouseout="this.style.color='#6b728066'">
       HOME
     </a>
-    <a href="http://localhost:5070/chat?agent=marin"
+    <a href="/chat?agent=marin"
        style="font-family:'Share Tech Mono',monospace;font-size:.65rem;color:#ff6b9d66;text-decoration:none;padding:3px 10px;border:1px solid #ff6b9d22;border-radius:3px;transition:all .2s"
        onmouseover="this.style.color='#ffb7c5'" onmouseout="this.style.color='#ff6b9d66'">
       MARIN CHAT
@@ -720,6 +735,7 @@ header::after {
       <div class="judge-avatar">⚖</div>
       <span class="judge-label">JUDGE · SYNTHESIS</span>
       <span class="judge-sub">reading both arguments…</span>
+      <button id="send-master-btn" class="master-btn" style="display:none" onclick="forwardToMaster()">⚔ FORWARD TO MASTER</button>
     </div>
     <div class="judge-scroll" id="judge-scroll">
       <!-- judge bubble inserted here -->
@@ -965,12 +981,38 @@ async function startFight(isFightAgain = false) {
   lastJudgeVerdict = judgeFull;
 
   document.querySelector('.judge-sub').textContent = `round ${roundNumber} verdict delivered`;
+  document.getElementById('send-master-btn').style.display = 'block';
+  document.getElementById('send-master-btn').disabled = false;
+  document.getElementById('send-master-btn').textContent = '⚔ FORWARD TO MASTER';
+
   setStatus('done');
   fighting = false;
   document.getElementById('fight-btn').disabled = false;
   document.getElementById('fight-btn').textContent = '⚔ FIGHT AGAIN';
   document.getElementById('fight-btn').onclick = () => startFight(true);
   document.getElementById('topic-input').disabled = false;
+}
+
+async function forwardToMaster() {
+  const btn = document.getElementById('send-master-btn');
+  btn.disabled = true;
+  btn.textContent = '⚔ FORWARDING…';
+  try {
+    const res = await fetch('/arena/send_master', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: lastJudgeVerdict })
+    });
+    if (res.ok) {
+      btn.textContent = '✓ VERDICT SENT';
+    } else {
+      btn.textContent = '✗ FAILED';
+      btn.disabled = false;
+    }
+  } catch (e) {
+    btn.textContent = '✗ ERROR';
+    btn.disabled = false;
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -990,6 +1032,7 @@ function resetArena() {
   document.getElementById('judge-panel').classList.remove('open');
   document.getElementById('judge-scroll').innerHTML = '';
   document.querySelector('.judge-sub').textContent = 'reading both arguments…';
+  document.getElementById('send-master-btn').style.display = 'none';
 
   document.getElementById('topic-input').value = '';
   document.getElementById('topic-input').disabled = false;
