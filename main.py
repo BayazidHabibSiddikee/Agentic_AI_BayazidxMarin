@@ -29,16 +29,22 @@ from arena import (
     _stream_debate, _stream_judge,
     _load_arena_history, _load_bayazid_history, _format_history_for_context,
 )
-from classifier import extract_timer_task, extract_topic, extract_quiz_params
-from marin_fier import classify # Use unified classifier
+from marin_fier import classify, extract_timer_task, extract_topic, extract_quiz_params # Use unified classifier
 from config import UPLOAD_FOLDER, HOST, PORT
 
 app = FastAPI(title="Bayazid HS-02")
 app.mount("/static", StaticFiles(directory="static"), name="static")
+app.mount("/codeflow", StaticFiles(directory="codeflow", html=True), name="codeflow")
 templates = Jinja2Templates(directory="templates")
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs("static/generated", exist_ok=True)
+
+@app.on_event("startup")
+async def startup_event():
+    init_db()
+    migrate_from_json()
+    print("[Database] Initialized and migrated.")
 
 ACTIVE_AGENT = "bayazid"
 
@@ -63,14 +69,15 @@ async def knowledge_hub_update(request: Request):
 @app.get("/research-hub", response_class=HTMLResponse)
 async def research_hub_page(request: Request):
     from fastapi.responses import RedirectResponse
-    return RedirectResponse(url="/knowledge-hub")
+    return RedirectResponse(url="/knowledge-hub?tab=research")
 
 @app.post("/api/research/search")
 async def research_search_api(request: Request):
-    from tools.knowledge_hub import search_pdfs
+    from tools.knowledge_hub import search_pdfs, search_web
     data = await request.json()
     query = data.get("query")
-    results = search_pdfs(query)
+    mode = data.get("mode", "pdf")  # "pdf" or "web"
+    results = search_web(query, max_results=10) if mode == "web" else search_pdfs(query)
     return JSONResponse({"results": results})
 
 @app.get("/api/market/quotes")
@@ -99,6 +106,13 @@ async def market_quotes_api(symbols: str = "AAPL,TSLA,META"):
 
 @app.get("/api/news/latest")
 async def get_latest_news_api():
+    try:
+        from database import get_latest_news
+        items = get_latest_news(limit=10)
+        if items:
+            return JSONResponse(items)
+    except Exception:
+        pass
     news_file = "storage/latest_news.json"
     if os.path.exists(news_file):
         with open(news_file, "r") as f:
@@ -230,43 +244,77 @@ async def handle_message(
 
     # For Bayazid, check intents for specialized modes
     print(f"[Routing] -> Bayazid Engine (Classifying...)")
-    clf = classify(message, agent_name="bayazid")
+    clf = classify(message)
     intent = clf["intent"]
-    sub = clf.get("sub_intent")
-    print(f"[Intent] Detected: {intent}")
+    params = clf.get("params", {})
+    print(f"[Intent] Detected: {intent} | Params: {params}")
 
     if intent == "timer":
-        task = extract_timer_task(message)
-        result = await handle_timer_command(sub or "status", task)
+        sub = params.get("sub_intent", "status")
+        task = params.get("task") or extract_timer_task(message)
+        result = await handle_timer_command(sub, task)
         async def timer_stream():
             yield result
         return StreamingResponse(timer_stream(), media_type="text/plain")
 
     elif intent == "teach":
-        topic = extract_topic(message)
-        depth = sub or "standard"
+        topic = params.get("topic") or extract_topic(message)
+        depth = params.get("sub_intent", "standard")
         return StreamingResponse(teach_topic(topic, depth), media_type="text/plain")
 
     elif intent == "study_plan":
-        topic = extract_topic(message)
+        topic = params.get("topic") or extract_topic(message)
         return StreamingResponse(create_study_plan(topic), media_type="text/plain")
 
+    elif intent == "quiz":
+        topic = params.get("topic") or extract_topic(message)
+        diff = params.get("difficulty", "medium")
+        num = params.get("num_questions", 5)
+        return StreamingResponse(generate_quiz(topic, diff, num), media_type="text/plain")
+
     elif intent == "code_review":
-        code_match = re.search(r'```[\w]*\n?([\s\S]+?)```', message)
-        code = code_match.group(1) if code_match else message
+        code = params.get("code")
+        if not code:
+            code_match = re.search(r'```[\w]*\n?([\s\S]+?)```', message)
+            code = code_match.group(1) if code_match else message
         return StreamingResponse(review_code(code), media_type="text/plain")
 
-    elif intent == "error_help":
-        return StreamingResponse(explain_error(message), media_type="text/plain")
+    elif intent == "debug":
+        error = params.get("error") or message
+        return StreamingResponse(explain_error(error), media_type="text/plain")
 
     # Default: Deep technical chat using the Recursive Master Agent
     print(f"[Routing] -> MasterAgent Autonomous Loop")
     from agent_master import MasterAgent
-    master = MasterAgent()
+    queue = asyncio.Queue()
+    
+    loop = asyncio.get_event_loop()
+    def callback(msg):
+        loop.call_soon_threadsafe(queue.put_nowait, msg + "\n")
+        
+    master = MasterAgent(callback=callback)
     
     async def master_stream():
-        result = master.execute_task(message)
-        yield result
+        # Run execute_task in a separate thread because it's synchronous
+        task = asyncio.create_task(asyncio.to_thread(master.execute_task, message))
+        
+        while not task.done():
+            try:
+                msg = await asyncio.wait_for(queue.get(), timeout=0.2)
+                yield msg
+            except asyncio.TimeoutError:
+                continue
+        
+        # Make sure to get anything remaining in queue
+        while not queue.empty():
+            yield await queue.get()
+            
+        # Yield the final result
+        final_result = await task
+        yield "\n" + "="*60 + "\n"
+        yield "  FINAL CONSOLIDATED ANSWER\n"
+        yield "="*60 + "\n\n"
+        yield final_result
 
     return StreamingResponse(
         master_stream(),

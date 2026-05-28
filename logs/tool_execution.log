@@ -1,0 +1,19 @@
+Playing raw data 'stdin' : Signed 16 bit Little Endian, Rate 22050 Hz, Mono
+[2026-05-28 04:02:43.431] [piper] [info] Loaded voice in 0.180431807 second(s)
+[2026-05-28 04:02:43.432] [piper] [info] Initialized piper
+[2026-05-28 04:03:52.763] [piper] [info] Waiting for audio to finish playing...
+[2026-05-28 04:04:45.753] [piper] [info] Real-time factor: 0.06382184067908653 (infer=3.5640662919999997 sec, audio=55.843990929705214 sec)
+[2026-05-28 04:04:45.753] [piper] [info] Terminated piper
+→ Fetching market price for [Bitcoin]
+→ Fetching latest news from [BBC]
+Playing raw data 'stdin' : Signed 16 bit Little Endian, Rate 22050 Hz, Mono
+[2026-05-28 17:23:03.599] [piper] [info] Loaded voice in 0.258531018 second(s)
+[2026-05-28 17:23:03.602] [piper] [info] Initialized piper
+[2026-05-28 17:23:46.808] [piper] [info] Waiting for audio to finish playing...
+Aborted by signal Terminated...
+aplay: pcm_write:2191: write error: Interrupted system call
+Playing raw data 'stdin' : Signed 16 bit Little Endian, Rate 22050 Hz, Mono
+[2026-05-28 17:29:37.238] [piper] [info] Loaded voice in 0.192525005 second(s)
+[2026-05-28 17:29:37.239] [piper] [info] Initialized piper
+Aborted by signal Terminated...
+aplay: pcm_write:2191: write error: Interrupted system call

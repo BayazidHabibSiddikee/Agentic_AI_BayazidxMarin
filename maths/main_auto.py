@@ -112,7 +112,7 @@ def _ollama_parse(text):
                 {"role": "user", "content": text},
             ],
         )
-        raw = resp["message"]["content"]
+        raw = resp.message.content if hasattr(resp, "message") else resp["message"]["content"]
         if "NOT_DRAW" in raw:
             return None
         cleaned = re.sub(r"^```(?:json)?\s*\n?", "", raw.strip())
@@ -157,7 +157,7 @@ def try_nlp(text):
 
 def ollama_respond(text):
     resp = ollama.chat(model=OLLAMA_MODEL, messages=[{"role": "user", "content": text}])
-    return resp["message"]["content"]
+    return resp.message.content if hasattr(resp, "message") else resp["message"]["content"]
 
 # ── SECURITY ───────────────────────────────────────────────────────────────────
 def is_authorized(message):

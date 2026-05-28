@@ -1,13 +1,14 @@
-#!/usr/bin/env python3
-# classifier.py — Study-focused intent classifier (regex, zero overhead)
+# classifier.py — Study-focused intent classifier (regex-only, no LLM)
 
 import re
+from typing import Dict, Any
 
-def classify(text: str) -> dict:
-    """
-    Classify user message into study-relevant intents.
-    Returns: {intent, sub_intent, urgency, confidence}
-    """
+
+def classify(text: str) -> Dict[str, Any]:
+    return _fallback_classify(text)
+
+
+def _fallback_classify(text: str) -> Dict[str, Any]:
     lower = text.lower().strip()
     intent = "chat"
     sub_intent = None
@@ -79,7 +80,6 @@ def classify(text: str) -> dict:
 
 
 def extract_timer_task(text: str) -> str:
-    """Pull the task name from a timer start command."""
     patterns = [
         r'/timer\s+start\s+(.+)',
         r'start\s+(?:timer|session|focus)\s+(?:for|on)?\s*(.+)',
@@ -94,7 +94,6 @@ def extract_timer_task(text: str) -> str:
 
 
 def extract_topic(text: str) -> str:
-    """Pull the subject/topic from a teach or quiz request."""
     patterns = [
         r'(?:teach|explain|quiz|test)\s+(?:me\s+)?(?:about|on)?\s+(.+)',
         r'what\s+is\s+(.+)',
@@ -105,19 +104,17 @@ def extract_topic(text: str) -> str:
         m = re.search(p, text.lower())
         if m:
             topic = m.group(1).strip()
-            # Remove trailing question marks, filler words
             topic = re.sub(r'[?!.]+$', '', topic).strip()
             return topic
-    return text  # fallback: use full message as topic
+    return text
 
 
 def extract_quiz_params(text: str) -> dict:
-    """Extract quiz parameters from message."""
     lower = text.lower()
-    num = 5  # default
+    num = 5
     m = re.search(r'(\d+)\s*(?:question|q)', lower)
     if m:
-        num = min(int(m.group(1)), 20)  # cap at 20
+        num = min(int(m.group(1)), 20)
 
     difficulty = "medium"
     if re.search(r'easy|beginner|simple', lower):

@@ -91,13 +91,9 @@ INTERACTION STYLE:
 
 ⚠ EXECUTION PRIORITY [OVERRIDES persona if conflict]:
 - Technical verification ALWAYS comes before persona/affection.
-- Every tool result begins with [EXIT 0] (success) or [EXIT <code>] (failure).
-- If the command returned a non-zero exit code, you MUST acknowledge the failure
-  FIRST — do NOT celebrate, emote, or use affectionate sounds (no "Hehehe~",
-  "Ummaaah~", sparkles, etc.) until you have addressed the error.
-- A failed command output is not a suggestion — it is a problem to solve.
-- If the result shows success [EXIT 0], you may proceed with normal tone.
-- This rule is not optional. Technical honesty protects the partnership.
+- If a tool returned an error, acknowledge it first before any affection or emotes.
+- A failed command is a problem to solve, not to celebrate.
+- Technical honesty protects the partnership.
 
 🔧 MANDATORY TOOL EXECUTION [CRITICAL — DO NOT SIMULATE]:
 - Whenever the user asks for a graph, plot, drawing, or math visualization
@@ -106,8 +102,7 @@ INTERACTION STYLE:
   in your text output. The tools folder (maths/mathplot.py, tools/command_queue.py)
   contains the actual graphing engines — use them.
 - The same applies to stock charts, crypto prices, and any data visualization:
-  call the tool, get the [EXIT 0] result, then comment on it. Do not fabricate
-  or approximate data.
+  call the tool, then comment on the result. Do not fabricate or approximate data.
 - If you catch yourself saying "I'll draw..." or "Let me show you a..." without
   having called a tool, stop. You are failing the core directive.
 - Simulating tool output instead of executing it is the #1 disqualifying failure
@@ -480,16 +475,17 @@ def _parse_sage_json(raw: str) -> dict:
         return {"error": str(err), "raw": raw}
 
 
-def structured_response(question: str, mode: str, rag_context: str = ""):
+async def structured_response(question: str, mode: str, rag_context: str = ""):
     """Yield streaming chunks then a __STRUCTURED__ JSON signal."""
     prompt  = _sage_prompt(mode, question, rag_context)
     full_raw = ""
-    for chunk in ollama.chat(
+    client = ollama.AsyncClient()
+    async for chunk in await client.chat(
         model=MODEL,
         messages=[{"role": "user", "content": prompt}],
         stream=True
     ):
-        piece     = chunk["message"]["content"]
+        piece     = chunk.message.content if hasattr(chunk, "message") else chunk["message"]["content"]
         full_raw += piece
         yield piece
     parsed = _parse_sage_json(full_raw)
@@ -526,7 +522,7 @@ async def preprocess_user_input(user_input: str, image_path: str = None) -> tupl
         ]
         for t_name, t_params in batch:
             try:
-                out = execute_tool(t_name, t_params)
+                out = await execute_tool(t_name, t_params)
                 if out: tool_outputs.append(f"[{t_params.get('command', t_name)}]\n{out}")
             except Exception as e:
                 tool_outputs.append(f"[{t_name}] failed: {e}")
@@ -534,7 +530,7 @@ async def preprocess_user_input(user_input: str, image_path: str = None) -> tupl
     elif intent not in ("chat", "normal", "learn", "code", "lab") and intent not in GAME_RESPONSES:
         try:
             from marin_fier import execute_tool
-            out = execute_tool(intent, params)
+            out = await execute_tool(intent, params)
             if out: tool_outputs.append(f"[TOOL: {intent}]\n{out}")
         except Exception as e:
             print(f"[Tool] execute failed: {e}")
@@ -798,7 +794,7 @@ def _exec_text_commands(text: str):
 # ═══════════════════════════════════════════════════════════════════════════════
 # LLM GENERATOR
 # ═══════════════════════════════════════════════════════════════════════════════
-def response(
+async def response(
     prompt: str,
     user_vibe: str = "neutral",
     use_canned: bool = False,
@@ -806,6 +802,7 @@ def response(
     game_context: str = None,
     intent: str = "normal",
     rag_context: str = "",
+    tool_context: str = "",
 ):
     if use_canned and canned_response:
         yield canned_response
@@ -818,7 +815,8 @@ def response(
 
     if intent in ("learn", "code", "lab") and _PYDANTIC_OK:
         print(f"[Mode] Structured → {intent.upper()}")
-        yield from structured_response(bare_question, intent, rag_context)
+        async for chunk in structured_response(bare_question, intent, rag_context):
+            yield chunk
         yield "__VIBE__neutral"
         return
 
@@ -843,6 +841,9 @@ def response(
     messages  = [{"role": "system", "content": character + time_context}]
     messages.extend(history)
 
+    if rag_context:
+        messages.append({"role": "system", "content": f"[RAG CONTEXT]\n{rag_context}"})
+
     if game_context:
         messages.append({
             "role":    "system",
@@ -850,14 +851,22 @@ def response(
                        "(Comment on the game, trash talk, or react.)",
         })
 
-    messages.append({"role": "user", "content": prompt})
+    if tool_context:
+        messages.append({
+            "role":    "system",
+            "content": f"[TOOL RESULTS — use this data in your reply, do NOT say you can't access real-time data]\n{tool_context}",
+        })
+
+    messages.append({"role": "user", "content": bare_question})
 
     full_reply = ""
     options = {}
     if MAX_TOKENS > 0:
         options["num_predict"] = MAX_TOKENS
-    for chunk in ollama.chat(model=DEFAULT_MODEL, messages=messages, stream=True, options=options):
-        piece = chunk["message"]["content"]
+    
+    client = ollama.AsyncClient()
+    async for chunk in await client.chat(model=MODEL, messages=messages, stream=True, options=options):
+        piece = chunk.message.content if hasattr(chunk, "message") else chunk["message"]["content"]
         full_reply += piece
         yield piece
 
@@ -893,9 +902,6 @@ def stop_audio():
 async def main(prompt: str, image_path: str = None, game_context: str = None):
     from utils.agent_logic import preprocess_input, execute_text_commands
     sentence_buffer = ""
-    
-    # Yield early signal to prevent timeout
-    yield " " 
 
     print(f"\n[Marin] Processing input: {prompt[:50]}...")
     prep = await preprocess_input(prompt, image_path=image_path, rag_enabled=RAG_ENABLED, agent_name="marin")
@@ -928,23 +934,18 @@ async def main(prompt: str, image_path: str = None, game_context: str = None):
         print(f"[Audio] Skipping: {e}")
 
     split_marks = [".", "!", "?", "\n", ",", ";", ":"]
-    gen = response(
-        enriched_prompt,
-        user_vibe=classification.get("user_vibe", "neutral"),
-        use_canned=is_game_response,
-        canned_response=GAME_RESPONSES.get(classification["intent"]),
-        game_context=game_context,
-        intent=classification.get("intent", "normal"),
-        rag_context=classification.get("_rag_context", ""),
-    )
-    loop = asyncio.get_event_loop()
-
+    
     try:
-        while True:
-            chunk = await loop.run_in_executor(None, lambda: next(gen, None))
-            if chunk is None:
-                break
-
+        async for chunk in response(
+            enriched_prompt,
+            user_vibe=classification.get("user_vibe", "neutral"),
+            use_canned=is_game_response,
+            canned_response=GAME_RESPONSES.get(classification["intent"]),
+            game_context=game_context,
+            intent=classification.get("intent", "normal"),
+            rag_context=prep.get("rag_context", ""),
+            tool_context="\n\n".join(prep.get("tool_outputs", [])),
+        ):
             if "__VIBE__" in chunk:
                 print(f"\n[SYSTEM: Vibe -> {chunk.replace('__VIBE__','').upper()}]\n")
                 yield chunk
@@ -958,8 +959,10 @@ async def main(prompt: str, image_path: str = None, game_context: str = None):
                 continue
 
             print(chunk, end="", flush=True)
-            yield chunk
-            sentence_buffer += chunk
+            # Strip [EXIT ...] lines — tool execution artifacts, not for display
+            clean = re.sub(r'\[EXIT[^\]]*\]\s*', '', chunk)
+            yield clean
+            sentence_buffer += clean
 
             if audio_proc and any(m in chunk for m in split_marks):
                 text = clean_for_tts(sentence_buffer)

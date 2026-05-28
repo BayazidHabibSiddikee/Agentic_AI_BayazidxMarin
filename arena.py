@@ -29,9 +29,11 @@ import database
 # Arena uses the base model directly — same model, clean slate per debate
 ARENA_MODEL = MODEL  # "gemma4:31b-cloud"
 
+# Resolve paths relative to this file to ensure correct static and template loading
+base_path = Path(__file__).parent
 app = FastAPI(title="Arena — Marin vs Bayazid HS-02")
-app.mount("/static", StaticFiles(directory="static"), name="static")
-templates = Jinja2Templates(directory="templates")
+app.mount("/static", StaticFiles(directory=base_path / "static"), name="static")
+templates = Jinja2Templates(directory=base_path / "templates")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -136,11 +138,9 @@ Keep it under 300 words.
 # STREAMING HELPERS
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _stream_debate(system_prompt: str, user_prompt: str, context: str = ""):
+async def _stream_debate(system_prompt: str, user_prompt: str, context: str = ""):
     """
-    Synchronous Ollama streaming generator.
-    If `context` is provided (the opponent's argument), it's injected so the
-    character can directly respond to it.
+    Asynchronous Ollama streaming generator.
     """
     messages = [{"role": "system", "content": system_prompt}]
 
@@ -156,19 +156,19 @@ def _stream_debate(system_prompt: str, user_prompt: str, context: str = ""):
 
     messages.append({"role": "user", "content": user_prompt})
 
-    stream = ollama.chat(
+    client = ollama.AsyncClient()
+    async for chunk in await client.chat(
         model=ARENA_MODEL,
         messages=messages,
         stream=True,
         options={"temperature": 0.75, "num_predict": 800},
-    )
-    for chunk in stream:
-        content = chunk.get("message", {}).get("content", "")
+    ):
+        content = chunk.message.content if hasattr(chunk, "message") else chunk.get("message", {}).get("content", "")
         if content:
             yield content
 
 
-def _stream_judge(topic: str, marin_arg: str, bayazid_arg: str):
+async def _stream_judge(topic: str, marin_arg: str, bayazid_arg: str):
     """Judge receives both full arguments and synthesises."""
     messages = [
         {"role": "system", "content": JUDGE_ARENA_PROMPT},
@@ -182,14 +182,14 @@ def _stream_judge(topic: str, marin_arg: str, bayazid_arg: str):
             ),
         },
     ]
-    stream = ollama.chat(
+    client = ollama.AsyncClient()
+    async for chunk in await client.chat(
         model=ARENA_MODEL,
         messages=messages,
         stream=True,
         options={"temperature": 0.5, "num_predict": 800},
-    )
-    for chunk in stream:
-        content = chunk.get("message", {}).get("content", "")
+    ):
+        content = chunk.message.content if hasattr(chunk, "message") else chunk.get("message", {}).get("content", "")
         if content:
             yield content
 
@@ -254,47 +254,30 @@ async def arena_stream(request: Request):
     marin_system   = build_marin_arena_prompt(marin_hist_ctx)
     bayazid_system = build_bayazid_arena_prompt(bayazid_hist_ctx)
 
-    # ── Streaming via queue (non-blocking) ────────────────────────────────────
-    queue = asyncio.Queue()
-    loop  = asyncio.get_event_loop()
-
-    def run_in_thread():
+    # ── Streaming via async generator ─────────────────────────────────────────
+    async def generate():
         try:
             if character == "marin":
-                gen = _stream_debate(
+                async for chunk in _stream_debate(
                     marin_system,
                     f'Argue your perspective on this topic: "{topic}"',
                     context,
-                )
+                ):
+                    yield chunk
             elif character == "bayazid":
-                gen = _stream_debate(
+                async for chunk in _stream_debate(
                     bayazid_system,
                     f'Argue your perspective on this topic: "{topic}"',
                     context,
-                )
+                ):
+                    yield chunk
             elif character == "judge":
-                gen = _stream_judge(topic, marin_arg, bayazid_arg)
+                async for chunk in _stream_judge(topic, marin_arg, bayazid_arg):
+                    yield chunk
             else:
-                loop.call_soon_threadsafe(queue.put_nowait, "[ERROR] Unknown character")
-                loop.call_soon_threadsafe(queue.put_nowait, None)
-                return
-
-            for chunk in gen:
-                loop.call_soon_threadsafe(queue.put_nowait, chunk)
-
+                yield "[ERROR] Unknown character"
         except Exception as e:
-            loop.call_soon_threadsafe(queue.put_nowait, f"[ERROR] {str(e)}")
-        finally:
-            loop.call_soon_threadsafe(queue.put_nowait, None)  # sentinel
-
-    threading.Thread(target=run_in_thread, daemon=True).start()
-
-    async def generate():
-        while True:
-            chunk = await queue.get()
-            if chunk is None:
-                break
-            yield chunk
+            yield f"[ERROR] {str(e)}"
 
     return StreamingResponse(generate(), media_type="text/plain")
 
@@ -304,6 +287,24 @@ async def arena_stream(request: Request):
 async def arena_stream_live(request: Request):
     """Alias — same as /arena/stream."""
     return await arena_stream(request)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ROUTE — SEND TO MASTER (forward verdict to agent_loop)
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.post("/arena/send_master")
+async def send_to_master(request: Request):
+    """Receive content from arena UI and store it for the master loop.
+    Expected JSON: {"content": "..."}
+    """
+    body = await request.json()
+    content = body.get("content", "")
+    if not content:
+        return {"error": "No content provided"}
+    # Store in database under a special "master" agent
+    database.save_message("master", "system", content)
+    return {"status": "sent"}
+
 
 
 # ══════════════════════════════════════════════════════════════════════════════

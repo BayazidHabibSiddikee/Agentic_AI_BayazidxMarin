@@ -161,7 +161,11 @@ def response(prompt: str, image_path: str = None):
             messages=messages,
             stream=True
         ):
-            if "message" in chunk and "content" in chunk["message"]:
+            if hasattr(chunk, "message") and chunk.message is not None:
+                piece = chunk.message.content
+                reply_parts.append(piece)
+                yield piece
+            elif isinstance(chunk, dict) and "message" in chunk and "content" in chunk["message"]:
                 piece = chunk["message"]["content"]
                 reply_parts.append(piece)
                 yield piece

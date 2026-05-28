@@ -20,13 +20,13 @@ import json
 import os
 import signal
 import sys
+import asyncio
 import subprocess
 from pathlib import Path
 from difflib import get_close_matches
 from typing import Optional
 from pydantic import BaseModel, Field
 from langchain_core.tools import StructuredTool
-from langchain_ollama import ChatOllama
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -123,6 +123,26 @@ class VPAInput(BaseModel):
 
 class NoInput(BaseModel):
     pass   # tools that need no parameters
+
+# ── Bayazid Input Schemas ───────────────────────────────────────────────────
+
+class TeachInput(BaseModel):
+    topic: str = Field(description="The subject or concept to explain")
+    sub_intent: str = Field(default="standard", description="Depth: 'quick', 'standard', or 'deep'")
+
+class QuizInput(BaseModel):
+    topic: str = Field(description="Topic for the quiz")
+    difficulty: str = Field(default="medium", description="Difficulty: 'easy', 'medium', or 'hard'")
+    num_questions: int = Field(default=5, description="Number of questions (1-20)")
+
+class StudyPlanInput(BaseModel):
+    topic: str = Field(description="The subject to create a roadmap for")
+
+class CodeReviewInput(BaseModel):
+    code: str = Field(description="The code snippet to review")
+
+class DebugInput(BaseModel):
+    error: str = Field(description="The error message or description of the bug")
 
 
 # ── COMMAND ALLOWLIST ─────────────────────────────────────────────────────────
@@ -280,27 +300,60 @@ def tool_set_timer(duration: str) -> str:
 
 def tool_get_crypto_price(coin: str = "bitcoin") -> str:
     coin = coin.lower().strip()
-    err = _popen("tools/crypto.py", ["--coin", coin], timeout=10)
-    if err: return err
-    return (f"Live {coin.title()} price tracker window is now open. "
-            f"Shows USD price refreshing every second via CoinGecko.")
+    from tools.crypto_data import fetch_crypto_price
+    data = fetch_crypto_price(coin)
+    # Also launch GUI window in background
+    _popen("tools/crypto.py", ["--coin", coin], timeout=30)
+    return data
 
 def tool_get_stock_info(company: str) -> str:
-    # Clamp to 3 words max
     company = " ".join(company.split()[:3]).strip()
-    # If it's a known ticker (ALL-CAPS, ≤5 chars) pass --ticker to bypass Yahoo search
+    from tools.stock_data import fetch_stock_price
+    data = fetch_stock_price(company)
+    # Also launch GUI window in background
     if company.upper() in _COMMON_UPPER or (company.isupper() and 1 <= len(company) <= 5):
-        err = _popen("tools/stock.py", ["--ticker", company.upper()])
+        _popen("tools/stock.py", ["--ticker", company.upper()])
     else:
-        err = _popen("tools/stock.py", ["--company", company])
-    if err: return err
-    return (f"Stock info window opened for {company}. "
-            f"Fetching current market price and 30-day chart via Yahoo Finance.")
+        _popen("tools/stock.py", ["--company", company])
+    return data
 
 def tool_open_news() -> str:
-    err = _popen("tools/news.py")
-    if err: return err
-    return "BBC News / Al Jazeera is loading in your default browser."
+    import json, os
+    # Try DB first
+    try:
+        from database import get_latest_news
+        items = get_latest_news(limit=5)
+        if items:
+            lines = ["📰 **LATEST NEWS**\n"]
+            for i, item in enumerate(items, 1):
+                lines.append(f"**{i}. {item['title']}**")
+                if item.get("summary"): lines.append(f"   {item['summary']}")
+                analysis = (item.get("analysis") or "").split("\n")[0]
+                if analysis: lines.append(f"   _{analysis}_")
+                lines.append(f"   🕐 {item['fetched_at'][:16]}")
+                lines.append("")
+            return "\n".join(lines)
+    except Exception:
+        pass
+    # Fallback: JSON file
+    news_file = os.path.join(BASE_DIR, "storage", "latest_news.json")
+    if os.path.exists(news_file):
+        try:
+            with open(news_file) as f:
+                items = json.load(f)
+            if items:
+                lines = ["📰 **LATEST NEWS**\n"]
+                for i, item in enumerate(items[:5], 1):
+                    lines.append(f"**{i}. {item.get('title', '')}**")
+                    if item.get("summary"): lines.append(f"   {item['summary']}")
+                    analysis = (item.get("analysis") or "").split("\n")[0]
+                    if analysis: lines.append(f"   _{analysis}_")
+                    lines.append("")
+                return "\n".join(lines)
+        except Exception:
+            pass
+    _popen("tools/news.py")
+    return "Opening news in browser (no cached news available)."
 
 def tool_send_email() -> str:
     err = _popen("tools/email_tool.py")
@@ -455,11 +508,12 @@ def tool_get_weather(city: str = "Dhaka") -> str:
 
 def tool_create_map(city: str = "Dhaka", destination: str = None) -> str:
     from tools.knowledge_hub import create_integrated_hub_map
+    from config import PORT
     res = create_integrated_hub_map(city, destination)
     if isinstance(res, str) and res.startswith("Error"):
         return res
     # Launch Knowledge Hub dashboard in browser
-    url = f"http://localhost:5069/knowledge-hub"
+    url = f"http://localhost:{PORT}/knowledge-hub"
     subprocess.Popen(["xdg-open", url], stdout=open('/home/sword/Documents/BayazidxMarin/logs/tool_execution.log', 'a'), stderr=open('/home/sword/Documents/BayazidxMarin/logs/tool_execution.log', 'a'))
     
     msg = f"Knowledge Hub Dashboard opened for {city}."
@@ -477,6 +531,7 @@ def tool_search_web(query: str, max_results: int = 5) -> str:
 
 def tool_search_pdfs(topic: str) -> str:
     from tools.knowledge_hub import search_pdfs
+    from config import PORT
     results = search_pdfs(topic)
     if isinstance(results, dict) and "error" in results:
         return f"PDF Search Error: {results['error']}"
@@ -484,7 +539,7 @@ def tool_search_pdfs(topic: str) -> str:
     formatted = [f"- {r['title']}: {r['href']}" for r in results]
     # Suggest opening the hub
     msg = f"PDF/Book Search Results for '{topic}':\n\n" + "\n".join(formatted[:5])
-    msg += f"\n\n(You can see more results at http://localhost:5069/research-hub)"
+    msg += f"\n\n(You can see more results at http://localhost:{PORT}/research-hub)"
     return msg
 
 def tool_scrape_content(url: str) -> str:
@@ -497,13 +552,14 @@ def tool_scrape_content(url: str) -> str:
 
 def tool_pin_places(city: str = "Dhaka", query: str = "tourist attraction") -> str:
     from tools.knowledge_hub import search_places_in_city, create_integrated_hub_map
+    from config import PORT
     pins = search_places_in_city(city, query)
     if not pins:
         return f"Could not find any '{query}' in {city}."
     
     res = create_integrated_hub_map(city, pins=pins)
     # Launch Knowledge Hub dashboard in browser
-    url = f"http://localhost:5069/knowledge-hub"
+    url = f"http://localhost:{PORT}/knowledge-hub"
     subprocess.Popen(["xdg-open", url], stdout=open('/home/sword/Documents/BayazidxMarin/logs/tool_execution.log', 'a'), stderr=open('/home/sword/Documents/BayazidxMarin/logs/tool_execution.log', 'a'))
     
     msg = f"Pinned {len(pins)} '{query}' in {city} on the map."
@@ -524,6 +580,23 @@ def tool_manage_vault(action: str, filename: str = None, content: str = None, ca
     # NOTE: This is a placeholder; the actual call happens in execute_tool()
     # where the agent_name is available.
     return "Vault operation triggered."
+
+# ── Bayazid Intents ──────────────────────────────────────────────────────────
+
+def tool_teach_topic(topic: str, sub_intent: str = "standard") -> str:
+    return f"BAYAZID_INTENT:teach:{topic}:{sub_intent}"
+
+def tool_generate_quiz(topic: str, difficulty: str = "medium", num_questions: int = 5) -> str:
+    return f"BAYAZID_INTENT:quiz:{topic}:{difficulty}:{num_questions}"
+
+def tool_create_study_plan(topic: str) -> str:
+    return f"BAYAZID_INTENT:study_plan:{topic}"
+
+def tool_review_code(code: str) -> str:
+    return f"BAYAZID_INTENT:code_review:{code}"
+
+def tool_explain_error(error: str, code: str = "") -> str:
+    return f"BAYAZID_INTENT:debug:{error}"
 
 # ══════════════════════════════════════════════════════════════════════════════
 # STRUCTURED TOOLS — bind schemas to callables
@@ -668,27 +741,36 @@ TOOLS = [
         ),
         args_schema=VaultInput,
     ),
+    # ── Bayazid Specialized Tools ─────────────────────────────────────────────
+    StructuredTool.from_function(
+        func=tool_teach_topic, name="teach",
+        description="Explain a concept or teach a topic. Use for 'how to', 'what is', etc.",
+        args_schema=TeachInput,
+    ),
+    StructuredTool.from_function(
+        func=tool_generate_quiz, name="quiz",
+        description="Generate a quiz or test on a specific topic.",
+        args_schema=QuizInput,
+    ),
+    StructuredTool.from_function(
+        func=tool_create_study_plan, name="study_plan",
+        description="Create a long-term learning roadmap or study plan for a subject.",
+        args_schema=StudyPlanInput,
+    ),
+    StructuredTool.from_function(
+        func=tool_review_code, name="code_review",
+        description="Review user-provided code for bugs and improvements.",
+        args_schema=CodeReviewInput,
+    ),
+    StructuredTool.from_function(
+        func=tool_explain_error, name="debug",
+        description="Analyze a code error/exception and provide a fix.",
+        args_schema=DebugInput,
+    ),
 ]
 
 # Map name → StructuredTool for fast lookup
 _TOOL_MAP: dict[str, StructuredTool] = {t.name: t for t in TOOLS}
-
-# ── LLM (lazy init — only created on first Stage 2 call) ─────────────────────
-from config import DEFAULT_MODEL, OLLAMA_BASE_URL
-
-_LLM_WITH_TOOLS = None
-
-def _get_llm():
-    global _LLM_WITH_TOOLS
-    if _LLM_WITH_TOOLS is None:
-        llm = ChatOllama(
-            model=DEFAULT_MODEL,
-            base_url=OLLAMA_BASE_URL,
-            temperature=0.0,
-            num_predict=120,    # enough for tool_call JSON + command string
-        )
-        _LLM_WITH_TOOLS = llm.bind_tools(TOOLS, tool_choice="any")
-    return _LLM_WITH_TOOLS
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -819,6 +901,55 @@ def _extract_duration_from(lower: str) -> str:
     if m: return m.group(1).strip()
     return lower.strip()
 
+def extract_topic(text: str) -> str:
+    """Pull the subject/topic from a teach or quiz request."""
+    patterns = [
+        r'(?:teach|explain|quiz|test)\s+(?:me\s+)?(?:about|on)?\s+(.+)',
+        r'what\s+is\s+(.+)',
+        r'how\s+does?\s+(.+?)\s+work',
+        r'study\s+plan\s+(?:for|on)\s+(.+)',
+        r'teach depth:[^—]*—\s*(.+)',
+        r'study plan for:\s*(.+)',
+        r'review my code:\n?([\s\S]*)'
+    ]
+    for p in patterns:
+        m = re.search(p, text, re.IGNORECASE)
+        if m:
+            topic = m.group(1).strip()
+            # Remove trailing question marks, filler words
+            topic = re.sub(r'[?!.]+$', '', topic).strip()
+            return topic
+    return text  # fallback: use full message as topic
+
+def extract_quiz_params(text: str) -> dict:
+    """Extract quiz parameters from message."""
+    lower = text.lower()
+    num = 5  # default
+    m = re.search(r'(\d+)\s*(?:question|q)', lower)
+    if m:
+        num = min(int(m.group(1)), 20)  # cap at 20
+
+    difficulty = "medium"
+    if re.search(r'easy|beginner|simple', lower):
+        difficulty = "easy"
+    elif re.search(r'hard|advanced|expert', lower):
+        difficulty = "hard"
+
+    return {"num_questions": num, "difficulty": difficulty}
+
+def extract_timer_task(text: str) -> str:
+    """Pull the task name from a timer start command."""
+    patterns = [
+        r'/timer\s+start\s+(.+)',
+        r'start\s+(?:timer|session|focus)\s+(?:for|on)?\s*(.+)',
+        r'focus\s+on\s+(.+)',
+        r'working\s+on\s+(.+)',
+    ]
+    for p in patterns:
+        m = re.search(p, text.lower())
+        if m:
+            return m.group(1).strip().title()
+    return ""
 
 # ── REGEX PATTERNS for Stage 1 ────────────────────────────────────────────────
 
@@ -869,9 +1000,40 @@ _PDF_PAT    = re.compile(r'\b(pdf|book|paper|textbook|research|thesis)\b')
 _MAP_PAT   = re.compile(r'\b(map|location|flood|weather\s*map|environmental\s*map|route|directions|pin|places|attractions|best\s*places)\b')
 _WEATHER_PAT = re.compile(r'\b(weather|temperature|humidity|temp)\b')
 
+# ── Bayazid specialized regex ──────────────────────────────────────────────
+_TEACH_PAT   = re.compile(r'\b(teach|explain|what\s+is|how\s+(?:does|to)|why\s+does|clarify|i\s+don\'?t\s+understand)\b')
+_QUIZ_PAT    = re.compile(r'\b(quiz|test\s+me|examine|practice\s+questions?|mcq)\b')
+_PLAN_PAT    = re.compile(r'\b(study\s+plan|learning\s+plan|roadmap|curriculum|schedule|how\s+to\s+learn)\b')
+_REVIEW_PAT  = re.compile(r'\b(review\s+my\s+code|check\s+(my\s+)?code|fix\s+(this|my))\b')
+_DEBUG_PAT   = re.compile(r'\b(error|exception|bug|crash|traceback|not\s+working|failed|undefined)\b')
+
 def _regex_stage(text: str) -> dict | None:
     """Returns {intent, params, confidence} or None if uncertain."""
     lower = text.lower()
+
+    # Bayazid Specialized Modes (High priority)
+    if _QUIZ_PAT.search(lower):
+        params = extract_quiz_params(lower)
+        params["topic"] = extract_topic(text)
+        return {"intent": "quiz", "params": params, "confidence": 0.95}
+    
+    if _PLAN_PAT.search(lower):
+        return {"intent": "study_plan", "params": {"topic": extract_topic(text)}, "confidence": 0.95}
+
+    if _TEACH_PAT.search(lower):
+        topic = extract_topic(text)
+        sub = "standard"
+        if re.search(r'quick|brief|tldr|short|summary', lower): sub = "quick"
+        elif re.search(r'deep|full|detail|thorough|complete', lower): sub = "deep"
+        return {"intent": "teach", "params": {"topic": topic, "sub_intent": sub}, "confidence": 0.95}
+
+    if _REVIEW_PAT.search(lower):
+        code_match = re.search(r'```[\w]*\n?([\s\S]+?)```', text)
+        code = code_match.group(1) if code_match else text
+        return {"intent": "code_review", "params": {"code": code}, "confidence": 0.95}
+
+    if _DEBUG_PAT.search(lower):
+        return {"intent": "debug", "params": {"error": text}, "confidence": 0.95}
 
     # PDF Search check
     if _PDF_PAT.search(lower) and _SEARCH_PAT.search(lower):
@@ -1084,55 +1246,10 @@ def _regex_stage(text: str) -> dict | None:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# STAGE 2 — QWEN WITH BOUND STRUCTURED TOOLS
-# ══════════════════════════════════════════════════════════════════════════════
-
-def _llm_stage(text: str) -> dict | None:
-    """
-    Ask qwen2.5:0.5b with bound StructuredTools.
-    If it emits a tool_call, invoke the tool and return result.
-    If no tool_call (i.e. it's just chat), return intent=chat.
-    """
-    try:
-        llm = _get_llm()
-        ai_msg = llm.invoke(text)
-        tool_calls = getattr(ai_msg, "tool_calls", None)
-
-        if not tool_calls:
-            return {"intent": "chat", "params": {}, "confidence": 0.80}
-
-        # Take only the first tool call (we never need multiple)
-        tc   = tool_calls[0]
-        name = tc["name"]
-        args = tc.get("args", {})
-
-        if name not in _TOOL_MAP:
-            return {"intent": "chat", "params": {}, "confidence": 0.50}
-
-        # Validate args through the Pydantic schema
-        schema_cls = _TOOL_MAP[name].args_schema
-        try:
-            validated = schema_cls(**args)
-            clean_args = validated.model_dump()
-        except Exception:
-            clean_args = args   # use raw if validation fails
-
-        return {
-            "intent":     name,
-            "params":     clean_args,
-            "confidence": 0.93,
-        }
-
-    except Exception as e:
-        print(f"[marin_fier] qwen stage failed: {e}")
-        return None
-
-
-# ══════════════════════════════════════════════════════════════════════════════
 # TOOL EXECUTOR — called by marin.py after classify() returns a tool intent
 # ══════════════════════════════════════════════════════════════════════════════
 
-def execute_tool(intent: str, params: dict, agent_name: str = "marin") -> str | None:
+async def execute_tool(intent: str, params: dict, agent_name: str = "marin") -> str | None:
     """
     Run the StructuredTool for the given intent.
     Returns the tool's context string (what it did), or None if not a tool.
@@ -1147,7 +1264,8 @@ def execute_tool(intent: str, params: dict, agent_name: str = "marin") -> str | 
             from tools.vault_manager import manage_vault
             result = f"Vault [{agent_name}] {params.get('action')} result: {json.dumps(manage_vault(agent_name, **params), indent=2)}"
         else:
-            result = _TOOL_MAP[intent].invoke(params)
+            # Use asyncio.to_thread for synchronous tool functions to keep the loop running
+            result = await asyncio.to_thread(_TOOL_MAP[intent].invoke, params)
             
         # Log tool execution to cmd_log so terminal panel shows it
         ts = datetime.datetime.now().strftime("%H:%M:%S")
@@ -1192,23 +1310,15 @@ _KNOWN_TOOLS = set(_TOOL_MAP.keys()) | {"run_all_tools"}
 
 def classify(text: str, agent_name: str = "marin") -> dict:
     """
-    Two-stage classification.
+    Single-stage regex classification.
     Returns: {intent, params, user_vibe, confidence, _tool_ack}
-
-    _tool_ack is always None here.
-    Caller (marin.py) calls execute_tool(intent, params) separately
-    so it can build the LLM context string.
     """
-    # Stage 1 — regex (fast, no model call)
+    # Regex stage (instant, no model call)
     result = _regex_stage(text)
 
-    # Stage 2 — qwen with StructuredTool binding
+    # Fallback to chat
     if result is None:
-        result = _llm_stage(text)
-
-    # Absolute fallback
-    if result is None:
-        result = {"intent": "chat", "params": {}, "confidence": 0.0}
+        result = {"intent": "chat", "params": {}, "confidence": 0.80}
 
     # Unknown intent → chat
     if result["intent"] not in _KNOWN_TOOLS:

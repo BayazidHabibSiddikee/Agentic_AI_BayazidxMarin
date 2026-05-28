@@ -1,6 +1,6 @@
 {
   "models": {
-    "default": "llama3.2:latest",
+    "default": "gemma4:31b-cloud",
     "fast": "qwen2.5:0.5b",
     "vision": "leo",
     "embedding": "all-MiniLM-L6-v2"

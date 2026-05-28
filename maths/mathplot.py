@@ -197,7 +197,7 @@ def _ollama_parse(text: str) -> dict | None:
                 {"role": "user", "content": text},
             ],
         )
-        raw = resp["message"]["content"]
+        raw = resp.message.content if hasattr(resp, "message") else resp["message"]["content"]
         if "NOT_DRAW" in raw:
             return None
         cleaned = re.sub(r"^```(?:json)?\s*\n?", "", raw.strip())

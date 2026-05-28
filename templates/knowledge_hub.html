@@ -344,7 +344,8 @@ body::after{
     <button class="agent-btn" onclick="openTab('chat')" id="btn-chat">💬 CHAT</button>
     <button class="agent-btn" onclick="openTab('research')" id="btn-research">📚 RESEARCH</button>
     <button class="agent-btn" onclick="openTab('terminal')" id="btn-terminal">💻 TERMINAL</button>
-  </div>
+    <button class="agent-btn" onclick="window.location.href='/codeflow'" id="btn-codeflow">🌊 FLOW</button>
+    </div>
 
   <div class="topbar-right">
     <div id="rag-status" class="auto-badge" style="margin-right:10px; cursor:pointer;" onclick="toggleRAG()">
@@ -521,13 +522,22 @@ body::after{
     <!-- RESEARCH TAB -->
     <div id="tab-research" class="tab-content" style="display:none; height:100%; padding:20px; overflow-y:auto; background:var(--bg2);">
       <div class="sec-hdr" style="font-size:1.2rem; margin-bottom:20px;">
-        <i class="fas fa-book-open"></i> RESEARCH HUB — PDF & KNOWLEDGE EXPLORER
+        <i class="fas fa-book-open"></i> RESEARCH HUB — PDF & WEB EXPLORER
+        <span style="font-size:0.7rem; color:var(--text-dim); margin-left:10px; font-family:'Share Tech Mono';">[ CAMOFOX ENGINE ]</span>
       </div>
       <div class="ctrl-strip" style="background:var(--panel); border-radius:8px; margin-bottom:20px; padding:15px;">
+        <div style="display:flex; gap:8px; margin-bottom:10px;">
+          <button id="res-mode-pdf" class="ctrl-btn" style="padding:6px 14px; font-size:0.8rem;" onclick="setResMode('pdf')">
+            <i class="fas fa-file-pdf"></i> PDF SEARCH
+          </button>
+          <button id="res-mode-web" class="ctrl-btn" style="padding:6px 14px; font-size:0.8rem; background:transparent; border:1px solid var(--border); color:var(--text-dim);" onclick="setResMode('web')">
+            <i class="fas fa-globe"></i> WEB SEARCH
+          </button>
+        </div>
         <div class="input-group" style="flex:1; display:flex; gap:10px;">
           <div class="ctrl-input-wrap" style="flex:1;">
             <i class="fas fa-search"></i>
-            <input type="text" id="res-search-query" placeholder="Search topics, books, papers... (e.g., Machine Learning, Quantum Physics)" style="width:100%;">
+            <input type="text" id="res-search-query" placeholder="Search topics, books, papers..." style="width:100%;">
           </div>
           <button class="ctrl-btn" onclick="performResearchSearch()">
             <i class="fas fa-search"></i> SEARCH
@@ -536,7 +546,7 @@ body::after{
       </div>
       <div id="res-loader" style="display:none; text-align:center; padding:40px;">
         <div class="spinner" style="margin: 0 auto;"></div>
-        <p style="margin-top:15px; font-family:'Share Tech Mono'; color:var(--text-dim);">SEARCHING KNOWLEDGE BASE...</p>
+        <p style="margin-top:15px; font-family:'Share Tech Mono'; color:var(--text-dim);">SEARCHING VIA CAMOFOX...</p>
       </div>
       <div id="res-results" class="results-grid" style="display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:15px;">
         <!-- Filled by JS -->
@@ -872,6 +882,23 @@ function clearPins(){
 }
 
 // ── RESEARCH SEARCH ────────────────────────────────────────────────────────
+let _resMode = 'pdf';
+function setResMode(mode) {
+  _resMode = mode;
+  const pdfBtn = document.getElementById('res-mode-pdf');
+  const webBtn = document.getElementById('res-mode-web');
+  const grad = 'linear-gradient(135deg,var(--purple),var(--violet))';
+  if (mode === 'pdf') {
+    pdfBtn.style.cssText = 'padding:6px 14px;font-size:0.8rem;';
+    webBtn.style.cssText = 'padding:6px 14px;font-size:0.8rem;background:transparent;border:1px solid var(--border);color:var(--text-dim);';
+    document.getElementById('res-search-query').placeholder = 'Search topics, books, papers...';
+  } else {
+    webBtn.style.cssText = 'padding:6px 14px;font-size:0.8rem;';
+    pdfBtn.style.cssText = 'padding:6px 14px;font-size:0.8rem;background:transparent;border:1px solid var(--border);color:var(--text-dim);';
+    document.getElementById('res-search-query').placeholder = 'Search the web via Camofox...';
+  }
+}
+
 async function performResearchSearch() {
   const query = document.getElementById('res-search-query').value.trim();
   const loader = document.getElementById('res-loader');
@@ -889,27 +916,26 @@ async function performResearchSearch() {
     const response = await fetch('/api/research/search', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({query: query})
+      body: JSON.stringify({query: query, mode: _resMode})
     });
     
     if (!response.ok) throw new Error('Search failed');
     const data = await response.json();
     
     if (data.results && data.results.length > 0) {
+      const icon = _resMode === 'pdf' ? 'fa-file-pdf' : 'fa-globe';
       resultsDiv.innerHTML = data.results.map((r, i) => `
         <div class="mcard" style="display:flex; flex-direction:column; gap:8px; padding:15px; height:auto;">
-          <div class="result-icon" style="font-size:1.5rem; color:var(--purple);">
-            <i class="fas fa-file-pdf"></i>
-          </div>
+          <div style="font-size:1.5rem; color:var(--purple);"><i class="fas ${icon}"></i></div>
           <a href="${r.href || '#'}" target="_blank" class="ticker" style="font-size:0.9rem; color:var(--violet); text-decoration:none; display:block;">${r.title || 'Untitled'}</a>
           <div class="pin-meta" style="font-size:0.75rem; color:var(--text-dim); line-height:1.4;">${(r.body || 'No description available').substring(0, 120)}...</div>
           <div class="pin-meta" style="margin-top:auto; font-size:0.65rem; color:var(--text-muted);">
-            <i class="fas fa-book"></i> RESOURCE ${i + 1}
+            <i class="fas fa-spider"></i> CAMOFOX · RESULT ${i + 1}
           </div>
         </div>
       `).join('');
     } else {
-      resultsDiv.innerHTML = `<div style="grid-column:1/-1; text-align:center; padding:40px; color:var(--text-muted);">No resources found for "${query}"</div>`;
+      resultsDiv.innerHTML = `<div style="grid-column:1/-1; text-align:center; padding:40px; color:var(--text-muted);">No results found for "${query}"</div>`;
     }
   } catch (err) {
     resultsDiv.innerHTML = `<div style="grid-column:1/-1; color:var(--danger); text-align:center;">Error: ${err.message}</div>`;

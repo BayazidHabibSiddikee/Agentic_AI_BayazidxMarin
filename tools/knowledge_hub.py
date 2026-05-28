@@ -488,8 +488,42 @@ def _fallback_search(query: str, max_results: int = 5) -> list:
     except Exception as e:
         return [{"error": f"Fallback search failed: {e}"}]
 
+def _camofox_search(query: str, max_results: int = 5) -> list:
+    """Search using Camofox stealth browser via its HTTP API."""
+    try:
+        CAMOFOX_URL = "http://localhost:9377"
+        search_url = f"https://duckduckgo.com/?q={requests.utils.quote(query)}"
+        open_res = requests.post(f"{CAMOFOX_URL}/tabs/open",
+            json={"userId": "research_hub", "url": search_url, "timeout": 30000}, timeout=35)
+        open_data = open_res.json()
+        if not open_data.get("ok"):
+            return []
+        tab_id = open_data["tabId"]
+        # Extract structured results via JS
+        js = """
+        Array.from(document.querySelectorAll('[data-result="web"] article')).slice(0,10).map(a => ({
+            title: a.querySelector('h2')?.innerText || '',
+            href:  a.querySelector('a[href]')?.href || '',
+            body:  a.querySelector('[data-result="snippet"]')?.innerText || ''
+        }))
+        """
+        eval_res = requests.post(f"{CAMOFOX_URL}/tabs/{tab_id}/evaluate",
+            json={"userId": "research_hub", "expression": js}, timeout=15)
+        eval_data = eval_res.json()
+        if eval_data.get("ok") and isinstance(eval_data.get("result"), list):
+            results = [r for r in eval_data["result"] if r.get("title")]
+            if results:
+                return results[:max_results]
+    except Exception as e:
+        print(f"[Camofox] Search error: {e}")
+    return []
+
+
 def search_web(query: str, max_results: int = 5) -> list:
-    """Search the web using DuckDuckGo with Fallback."""
+    """Search the web — tries Camofox first, then DuckDuckGo, then fallback."""
+    results = _camofox_search(query, max_results)
+    if results:
+        return results
     try:
         from duckduckgo_search import DDGS
         with DDGS() as ddgs:
@@ -498,7 +532,6 @@ def search_web(query: str, max_results: int = 5) -> list:
                 return results
     except Exception as e:
         print(f"DDG Search Error: {e}")
-    
     print(f"Switching to Fallback Search for: {query}")
     return _fallback_search(query, max_results)
 

@@ -1021,7 +1021,7 @@ class ConnectFourTwoPlayer:
         return win
     
     def back4(self, x, y, turn):
-        """Check for 4 connected diagonally (\)"""
+        """Check for 4 connected diagonally (\\)"""
         win = False
         for dif in (-3, -2, -1, 0):
             try:

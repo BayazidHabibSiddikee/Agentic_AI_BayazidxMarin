@@ -48,6 +48,18 @@ def init_db():
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+
+    # News Table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS news (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            summary TEXT,
+            analysis TEXT,
+            source TEXT DEFAULT 'AlJazeera',
+            fetched_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
     
     conn.commit()
     conn.close()
@@ -149,6 +161,32 @@ def get_state(key: str, default: Any = None) -> Any:
     except:
         return row["value"]
 
+# ── News API ─────────────────────────────────────────────────────────────────
+
+def save_news(items: list, source: str = "AlJazeera"):
+    conn = get_connection()
+    cursor = conn.cursor()
+    for item in items:
+        cursor.execute(
+            "INSERT INTO news (title, summary, analysis, source, fetched_at) VALUES (?, ?, ?, ?, ?)",
+            (item.get("title", ""), item.get("summary", ""), item.get("analysis", ""),
+             source, item.get("timestamp", datetime.now().isoformat()))
+        )
+    conn.commit()
+    conn.close()
+
+def get_latest_news(limit: int = 5) -> list:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT title, summary, analysis, source, fetched_at FROM news ORDER BY fetched_at DESC LIMIT ?",
+        (limit,)
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
 # ── Migration Helper ──────────────────────────────────────────────────────────
 
 def migrate_from_json():
@@ -166,6 +204,7 @@ def migrate_from_json():
                     for msg in history:
                         save_message(agent, msg["role"], msg["content"])
                 print(f"Migrated {agent} history.")
+                os.remove(json_path)
             except Exception as e:
                 print(f"Error migrating {agent} history: {e}")
 
@@ -177,6 +216,7 @@ def migrate_from_json():
                 vibe = json.load(f)
                 set_state("vibe", vibe)
             print("Migrated vibe state.")
+            os.remove(vibe_path)
         except Exception as e:
             print(f"Error migrating vibe state: {e}")
 
@@ -196,6 +236,7 @@ def migrate_from_json():
                 conn.commit()
                 conn.close()
             print("Migrated timers.")
+            os.remove(timer_path)
         except Exception as e:
             print(f"Error migrating timers: {e}")
 

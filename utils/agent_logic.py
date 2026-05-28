@@ -126,7 +126,7 @@ async def preprocess_input(user_input: str, image_path: str = None, rag_enabled:
     tool_outputs = []
     if intent not in ("chat", "normal", "learn", "code", "lab"):
         try:
-            out = execute_tool(intent, params, agent_name=agent_name)
+            out = await execute_tool(intent, params, agent_name=agent_name)
             if out: tool_outputs.append(f"[TOOL: {intent}]\n{out}")
         except Exception as e:
             print(f"[AgentLogic] Tool execution failed: {e}")

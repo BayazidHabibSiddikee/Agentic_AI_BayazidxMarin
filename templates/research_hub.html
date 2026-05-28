@@ -307,7 +307,8 @@
             </div>
         </div>
         <div class="nav-links">
-            <a href="/">← Back to Chat</a>
+            <a href="/">← Back Home</a>
+            <a href="/codeflow">FLOW</a>
         </div>
     </header>
 
@@ -317,11 +318,20 @@
             <div class="search-row">
                 <div class="input-group">
                     <i class="fas fa-search"></i>
-                    <input type="text" id="search-query" placeholder="Search topics, books, papers... (e.g., Machine Learning, Quantum Physics)">
+                    <input type="text" id="search-query" placeholder="Search topics, books, papers...">
                 </div>
+                <button class="btn" id="btn-pdf" onclick="setMode('pdf')" style="padding:0.8rem 1.2rem;">
+                    <i class="fas fa-file-pdf"></i> PDF
+                </button>
+                <button class="btn" id="btn-web" onclick="setMode('web')" style="padding:0.8rem 1.2rem; background:transparent; border:1px solid #8b5cf6; color:#8b5cf6;">
+                    <i class="fas fa-globe"></i> WEB
+                </button>
                 <button class="btn" onclick="performSearch()">
                     <i class="fas fa-search"></i> Search
                 </button>
+            </div>
+            <div style="font-size:0.75rem; color:var(--dim); margin-top:0.5rem;">
+                <i class="fas fa-spider"></i> Powered by Camofox stealth browser
             </div>
         </div>
 
@@ -340,8 +350,22 @@
 
     <script>
         const searchInput = document.getElementById('search-query');
+        let _mode = 'pdf';
 
-        // Allow Enter key to search
+        function setMode(m) {
+            _mode = m;
+            const grad = 'linear-gradient(135deg, #8b5cf6, #a78bfa)';
+            if (m === 'pdf') {
+                document.getElementById('btn-pdf').style.cssText = '';
+                document.getElementById('btn-web').style.cssText = 'padding:0.8rem 1.2rem; background:transparent; border:1px solid #8b5cf6; color:#8b5cf6;';
+                searchInput.placeholder = 'Search topics, books, papers...';
+            } else {
+                document.getElementById('btn-web').style.cssText = '';
+                document.getElementById('btn-pdf').style.cssText = 'padding:0.8rem 1.2rem; background:transparent; border:1px solid #8b5cf6; color:#8b5cf6;';
+                searchInput.placeholder = 'Search the web via Camofox...';
+            }
+        }
+
         searchInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') performSearch();
         });
@@ -363,30 +387,29 @@
                 const response = await fetch('/api/research/search', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({query: query})
+                    body: JSON.stringify({query: query, mode: _mode})
                 });
                 
                 if (!response.ok) throw new Error('Search failed');
                 
                 const data = await response.json();
+                const icon = _mode === 'pdf' ? 'fa-file-pdf' : 'fa-globe';
                 
                 if (data.results && data.results.length > 0) {
                     resultsDiv.innerHTML = '<div class="results-grid">' + 
                         data.results.map((r, i) => `
                             <div class="result-card">
-                                <div class="result-icon">
-                                    <i class="fas fa-file-pdf"></i>
-                                </div>
+                                <div class="result-icon"><i class="fas ${icon}"></i></div>
                                 <a href="${r.href || '#'}" target="_blank" class="result-title">${escapeHtml(r.title || 'Untitled')}</a>
                                 <div class="result-snippet">${escapeHtml((r.body || 'No description available').substring(0, 150))}...</div>
                                 <div class="result-meta">
-                                    <span><i class="fas fa-book"></i> Resource ${i + 1}</span>
+                                    <span><i class="fas fa-spider"></i> Camofox · Result ${i + 1}</span>
                                 </div>
                             </div>
                         `).join('') + 
                         '</div>';
                 } else {
-                    resultsDiv.innerHTML = '<div class="empty-state"><i class="fas fa-inbox"></i><p>No resources found for "<strong>' + escapeHtml(query) + '</strong>"</p><p style="font-size: 0.9rem; margin-top: 0.5rem;">Try different keywords</p></div>';
+                    resultsDiv.innerHTML = '<div class="empty-state"><i class="fas fa-inbox"></i><p>No results found for "<strong>' + escapeHtml(query) + '</strong>"</p></div>';
                 }
             } catch (err) {
                 resultsDiv.innerHTML = '<div class="error-message"><i class="fas fa-exclamation-triangle"></i> Error: ' + escapeHtml(err.message) + '</div>';
