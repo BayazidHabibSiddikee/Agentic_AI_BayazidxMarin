@@ -855,10 +855,7 @@ async def response(
         full_reply += piece
         yield piece
 
-    # Auto-execute any python3 commands Marin wrote as text
-    _exec_text_commands(full_reply)
-
-    save_to_history(bare_question, full_reply)
+    # Vibe analysis (history saving is handled by main())
     marin_vibe = analyze_marin_vibe(full_reply)
     save_vibe(user_vibe, marin_vibe)
     yield f"__VIBE__{marin_vibe}"
@@ -882,32 +879,95 @@ def stop_audio():
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# STREAM MODEL HELPER (same as bayazid)
+# ═══════════════════════════════════════════════════════════════════════════════
+async def _stream_model(messages, **kwargs):
+    defaults = {"temperature": 0.7, "num_predict": 2000}
+    defaults.update(kwargs)
+    client = ollama.AsyncClient()
+    async for chunk in await client.chat(model=MODEL, messages=messages, stream=True, options=defaults):
+        content = chunk.message.content if hasattr(chunk, "message") else chunk.get("message", {}).get("content", "")
+        if content:
+            yield content
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # MAIN ASYNC ENTRY POINT
 # ═══════════════════════════════════════════════════════════════════════════════
 async def main(prompt: str, image_path: str = None, game_context: str = None):
     from utils.agent_logic import preprocess_input, extract_and_execute_commands
-    sentence_buffer = ""
 
     print(f"\n[Marin] Processing input: {prompt[:50]}...")
     prep = await preprocess_input(prompt, image_path=image_path, rag_enabled=RAG_ENABLED, agent_name="marin")
     enriched_prompt = prep["enriched_prompt"]
     classification  = prep["classification"]
+    user_vibe = classification.get("user_vibe", "neutral")
 
     is_game_response = (
         classification["intent"] in GAME_RESPONSES
         and classification.get("confidence", 0) >= 0.5
     )
 
+    # ── Handle canned game responses ──────────────────────────────────────
+    if is_game_response and GAME_RESPONSES.get(classification["intent"]):
+        yield GAME_RESPONSES[classification["intent"]]
+        return
+
+    # ── Handle structured output modes (learn/code/lab) ───────────────────
+    intent = classification.get("intent", "normal")
+    if intent in ("learn", "code", "lab") and _PYDANTIC_OK:
+        bare_question = prompt
+        if "USER'S MESSAGE:" in prompt:
+            bare_question = prompt.split("USER'S MESSAGE:")[-1].strip()
+        async for chunk in structured_response(bare_question, intent, prep.get("rag_context", "")):
+            yield chunk
+        return
+
+    # ── Build messages (same as bayazid) ──────────────────────────────────
+    bare_question = prompt
+    if "USER'S MESSAGE:" in prompt:
+        bare_question = prompt.split("USER'S MESSAGE:")[-1].strip()
+
+    context_parts = [get_character_prompt(user_vibe)]
+
+    now = datetime.now()
+    time_str = now.strftime("%A, %B %d, %Y | %I:%M %p")
+    context_parts.append(f"\n[CURRENT TIME]\n{time_str}")
+
+    from bayazid import timer
+    timer_status = timer.get_session_status()
+    if timer_status["active"]:
+        context_parts.append(
+            f"\n[ACTIVE FOCUS SESSION]\n"
+            f"Task: {timer_status['task']}\n"
+            f"Elapsed: {timer_status['elapsed_formatted']}"
+        )
+    else:
+        context_parts.append("\n[FOCUS STATUS]\nCurrently Idle.")
+
+    rag_context = prep.get("rag_context", "")
+    if rag_context:
+        context_parts.append(f"\n[RAG CONTEXT]\n{rag_context}")
+
+    if game_context:
+        context_parts.append(f"\n[ACTIVE TIC TAC TOE GAME STATE]\n{game_context}\n(Comment on the game, trash talk, or react.)")
+
+    tool_outputs = prep.get("tool_outputs", [])
+    if tool_outputs:
+        context_parts.append(f"\n[TOOL RESULTS]\n" + "\n\n".join(tool_outputs))
+
+    messages = [{"role": "system", "content": "\n\n".join(context_parts)}]
+    messages.extend(load_history(limit=30))
+    messages.append({"role": "user", "content": bare_question})
+
+    # ── Audio setup ───────────────────────────────────────────────────────
     global _audio_process
     _audio_process = None
     audio_proc = None
     try:
-        if VOICE_ENABLED and not is_game_response and os.path.exists(VOICE_PATH):
+        if VOICE_ENABLED and os.path.exists(VOICE_PATH):
             stop_audio()
-            cmd = (
-                f"piper-tts --model {VOICE_PATH} --output_raw "
-                "| aplay -r 22050 -f S16_LE -t raw"
-            )
+            cmd = f"piper-tts --model {VOICE_PATH} --output_raw | aplay -r 22050 -f S16_LE -t raw"
             audio_proc = await asyncio.create_subprocess_shell(
                 cmd,
                 stdin=asyncio.subprocess.PIPE,
@@ -919,32 +979,12 @@ async def main(prompt: str, image_path: str = None, game_context: str = None):
         print(f"[Audio] Skipping: {e}")
 
     split_marks = [".", "!", "?", "\n", ",", ";", ":"]
+    sentence_buffer = ""
 
     try:
-        # ── PASS 1: Initial response ─────────────────────────────────────
+        # ── PASS 1: Stream response ───────────────────────────────────────
         full_response = ""
-        async for chunk in response(
-            enriched_prompt,
-            user_vibe=classification.get("user_vibe", "neutral"),
-            use_canned=is_game_response,
-            canned_response=GAME_RESPONSES.get(classification["intent"]),
-            game_context=game_context,
-            intent=classification.get("intent", "normal"),
-            rag_context=prep.get("rag_context", ""),
-            tool_context="\n\n".join(prep.get("tool_outputs", [])),
-        ):
-            if "__VIBE__" in chunk:
-                print(f"\n[SYSTEM: Vibe -> {chunk.replace('__VIBE__','').upper()}]\n")
-                yield chunk
-                continue
-
-            if "__STRUCTURED__" in chunk:
-                mode_map = {"learn": "📘 TEACHER", "code": "💻 CODER", "lab": "🔬 LAB REPORT"}
-                intent_label = mode_map.get(classification.get("intent", ""), "STRUCTURED")
-                print(f"\n[Mode] {intent_label} output ready")
-                yield chunk
-                continue
-
+        async for chunk in _stream_model(messages):
             print(chunk, end="", flush=True)
             clean = re.sub(r'\[EXIT[^\]]*\]\s*', '', chunk)
             yield clean
@@ -968,21 +1008,19 @@ async def main(prompt: str, image_path: str = None, game_context: str = None):
         cmd_results = extract_and_execute_commands(full_response, BASE_DIR)
         if cmd_results:
             yield f"\n\n{cmd_results}\n\n"
-            yield "[Analyzing results...]\n"
 
-            history = load_history(limit=20)
-            follow_messages = [
-                {"role": "system", "content": get_character_prompt("focused")},
-                *history,
-                {"role": "assistant", "content": full_response},
-                {"role": "system", "content": cmd_results},
-                {"role": "user", "content": "Analyze the command output above and give a clear summary."},
-            ]
+            messages.append({"role": "assistant", "content": full_response})
+            messages.append({"role": "system", "content": f"[COMMAND OUTPUT]\n{cmd_results}\n\nThe commands above have been executed. Analyze the output, report any errors, and continue if needed."})
 
-            client = ollama.AsyncClient()
-            async for chunk in await client.chat(model=MODEL, messages=follow_messages, stream=True, options={"temperature": 0.3}):
-                piece = chunk.message.content if hasattr(chunk, "message") else chunk["message"]["content"]
-                yield piece
+            async for chunk in _stream_model(messages, temperature=0.5, num_predict=1500):
+                yield chunk
+
+        # ── Save history ──────────────────────────────────────────────────
+        full_saved = full_response + ("\n\n" + cmd_results if cmd_results else "")
+        marin_vibe = analyze_marin_vibe(full_response)
+        save_to_history(bare_question, full_saved)
+        save_vibe(user_vibe, marin_vibe)
+        yield f"__VIBE__{marin_vibe}"
 
     finally:
         if audio_proc and audio_proc.stdin:

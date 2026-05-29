@@ -44,7 +44,7 @@ RSS_SOURCES = {
 # Set to a list of keys to restrict which feeds run, e.g. ["BBC", "Reuters"]
 # Leave as None to harvest ALL sources above.
 ACTIVE_SOURCES   = None
-ITEMS_PER_SOURCE = 3   # headlines fetched per feed
+ITEMS_PER_SOURCE = 20   # headlines fetched per feed
 
 
 # ── Fetching ──────────────────────────────────────────────────────────────────

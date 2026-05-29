@@ -31,6 +31,9 @@ from config import UPLOAD_FOLDER, HOST, PORT
 app = FastAPI(title="Bayazid HS-02")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 app.mount("/codeflow", StaticFiles(directory="codeflow", html=True), name="codeflow")
+
+from arena import app as arena_app
+app.mount("/arena", arena_app, name="arena")
 templates = Jinja2Templates(directory="templates")
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -53,14 +56,19 @@ async def knowledge_hub_page(request: Request):
 @app.post("/api/knowledge-hub/update")
 async def knowledge_hub_update(request: Request):
     from tools.knowledge_hub import create_integrated_hub_map
-    data = await request.json()
-    location = data.get("location", "Dhaka")
-    destination = data.get("destination")
-    query = data.get("query", "tourist attraction")
-    
-    # The tool now handles searching pins internally via the 'query' parameter
-    result = create_integrated_hub_map(location, destination, query=query)
-    return JSONResponse(result)
+    try:
+        data = await request.json()
+        location = data.get("location", "Dhaka")
+        destination = data.get("destination")
+        query = data.get("query") or "tourist attraction"
+        limit = int(data.get("limit", 8))
+        
+        # The tool now handles searching pins internally via the 'query' parameter
+        result = create_integrated_hub_map(location, destination, query=query, limit=limit)
+        return JSONResponse(result)
+    except Exception as e:
+        print(f"[KnowledgeHub API] Error: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 @app.get("/research-hub", response_class=HTMLResponse)
 async def research_hub_page(request: Request):

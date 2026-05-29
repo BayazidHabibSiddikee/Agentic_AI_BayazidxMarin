@@ -212,7 +212,7 @@ async def get_arena_alias(request: Request):
 # ROUTE — ARENA STREAM  (true live streaming via queue)
 # ══════════════════════════════════════════════════════════════════════════════
 
-@app.post("/arena/stream")
+@app.post("/stream")
 async def arena_stream(request: Request):
     """
     Single endpoint for all three debate characters.
@@ -283,7 +283,7 @@ async def arena_stream(request: Request):
 
 
 # ── Backward-compat alias ─────────────────────────────────────────────────────
-@app.post("/arena/stream/live")
+@app.post("/stream/live")
 async def arena_stream_live(request: Request):
     """Alias — same as /arena/stream."""
     return await arena_stream(request)
@@ -292,18 +292,38 @@ async def arena_stream_live(request: Request):
 # ROUTE — SEND TO MASTER (forward verdict to agent_loop)
 # ══════════════════════════════════════════════════════════════════════════════
 
-@app.post("/arena/send_master")
+@app.post("/send_master")
 async def send_to_master(request: Request):
-    """Receive content from arena UI and store it for the master loop.
+    """Forward debate verdict to MasterAgent for execution.
     Expected JSON: {"content": "..."}
+    Returns the MasterAgent's consolidated result.
     """
     body = await request.json()
     content = body.get("content", "")
     if not content:
         return {"error": "No content provided"}
-    # Store in database under a special "master" agent
+
     database.save_message("master", "system", content)
-    return {"status": "sent"}
+
+    try:
+        from agent_master import MasterAgent
+
+        logs = []
+        def log_callback(msg):
+            logs.append(msg)
+
+        master = MasterAgent(orchestrator="opencode", review_passes=2, verbose=False, callback=log_callback)
+        result = await master.execute_task(content)
+
+        database.save_message("master", "assistant", result)
+
+        return {
+            "status": "executed",
+            "result": result,
+            "logs": logs[-20:],
+        }
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
 
 
 
@@ -311,7 +331,7 @@ async def send_to_master(request: Request):
 # ROUTE — HISTORY PEEK  (optional — useful for debugging / profile page)
 # ══════════════════════════════════════════════════════════════════════════════
 
-@app.get("/arena/history")
+@app.get("/history")
 async def arena_history(limit: int = 10):
     """Return the last N messages from both histories."""
     marin_hist   = await asyncio.to_thread(_load_arena_history,   limit)

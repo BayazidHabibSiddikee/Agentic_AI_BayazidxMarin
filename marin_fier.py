@@ -92,8 +92,9 @@ class WeatherInput(BaseModel):
     city: str = Field(default="Dhaka", description="City name to fetch weather and humidity for")
 
 class MapInput(BaseModel):
-    city: str = Field(default="Dhaka", description="City name to center the environmental (weather/flood) map on")
-    destination: Optional[str] = Field(default=None, description="Optional destination city to calculate a route from the primary city")
+    city: str = Field(default="Dhaka", description="City name to center the map on")
+    destination: Optional[str] = Field(default=None, description="Optional destination city for routing")
+    custom_pins: Optional[list] = Field(default=None, description="List of custom location dicts with 'name', 'lat', 'lon', 'description' keys")
 
 class SearchInput(BaseModel):
     query: str = Field(description="Search query for web searching")
@@ -506,19 +507,44 @@ def tool_get_weather(city: str = "Dhaka") -> str:
         f"Recorded at: {data['time']}"
     )
 
-def tool_create_map(city: str = "Dhaka", destination: str = None) -> str:
-    from tools.knowledge_hub import create_integrated_hub_map
+def tool_create_map(city: str = "Dhaka", destination: str = None, custom_pins: list = None) -> str:
+    from tools.knowledge_hub import create_integrated_hub_map, _geocode
     from config import PORT
-    res = create_integrated_hub_map(city, destination)
-    if isinstance(res, str) and res.startswith("Error"):
-        return res
-    # Launch Knowledge Hub dashboard in browser
-    url = f"http://localhost:{PORT}/knowledge-hub"
-    subprocess.Popen(["xdg-open", url], stdout=open('/home/sword/Documents/BayazidxMarin/logs/tool_execution.log', 'a'), stderr=open('/home/sword/Documents/BayazidxMarin/logs/tool_execution.log', 'a'))
+
+    # Geocode custom pins that don't have lat/lon
+    if custom_pins:
+        geocoded = []
+        for pin in custom_pins:
+            if pin.get("lat") and pin.get("lon"):
+                geocoded.append(pin)
+            else:
+                name = pin.get("name", "")
+                query = f"{name}, {city}" if city else name
+                try:
+                    loc = _geocode(query)
+                    if loc:
+                        geocoded.append({
+                            "name": name,
+                            "lat": loc.latitude,
+                            "lon": loc.longitude,
+                            "description": pin.get("description", ""),
+                        })
+                except Exception:
+                    pass
+        custom_pins = geocoded
+
+    res = create_integrated_hub_map(city, destination, custom_pins=custom_pins)
+    if isinstance(res, dict) and "error" in res:
+        return res["error"]
+    # Open map directly in browser
+    map_url = res.get("map_url", "/static/generated/knowledge_hub_map.html")
+    full_url = f"http://localhost:{PORT}{map_url}"
+    subprocess.Popen(["xdg-open", full_url], stdout=open('/home/sword/Documents/BayazidxMarin/logs/tool_execution.log', 'a'), stderr=open('/home/sword/Documents/BayazidxMarin/logs/tool_execution.log', 'a'))
     
-    msg = f"Knowledge Hub Dashboard opened for {city}."
+    pin_count = len(res.get("custom_pins", [])) + len(res.get("pins", []))
+    msg = f"Map created for {city} with {pin_count} pins."
     if destination:
-        msg += f" Routing to {destination} added."
+        msg += f" Route to {destination} included."
     return msg
 
 def tool_search_web(query: str, max_results: int = 5) -> str:
@@ -1000,6 +1026,35 @@ _PDF_PAT    = re.compile(r'\b(pdf|book|paper|textbook|research|thesis)\b')
 _MAP_PAT   = re.compile(r'\b(map|location|flood|weather\s*map|environmental\s*map|route|directions|pin|places|attractions|best\s*places)\b')
 _WEATHER_PAT = re.compile(r'\b(weather|temperature|humidity|temp)\b')
 
+# ── 64 Districts (Zila) of Bangladesh ──────────────────────────────────────
+BD_DISTRICTS = {
+    "barisal", "bhola", "barguna", "patuakhali", "pirojpur",
+    "chittagong", "coxsbazar", "comilla", "feni", "brahmanbaria",
+    "chandpur", "lakshmipur", "noakhali", "khagrachhari", "rangamati", "bandarban",
+    "dhaka", "gazipur", "narayanganj", "manikganj", "munshiganj",
+    "narsingdi", "tangail", "jamalpur", "mymensingh", "sherpur",
+    "netrakona", "kishoreganj", "faridpur", "gopalganj", "madaripur",
+    "rajbari", "shariatpur",
+    "khulna", "bagerhat", "satkhira", "jessore", "jhenaidah",
+    "magura", "narail", "kustia", "chuadanga", "meherpur",
+    "rajshahi", "bogra", "joypurhat", "naogaon", "natore",
+    "chapainawabganj", "sirajganj", "pabna", "rajshahi",
+    "rangpur", "dinajpur", "thakurgaon", "panchagarh", "lalmonirhat",
+    "kurigram", "gaibandha", "nilphamari", "roxy", "syedpur",
+    "sylhet", "moulvibazar", "habiganj", "sunamganj",
+}
+
+# Non-city words to skip during extraction
+_BD_DISTRICTS_NORMALIZED = {d.replace("'", "").replace(" ", ""): d for d in BD_DISTRICTS}
+
+def _find_district(text: str) -> str | None:
+    """Find a Bangladesh district name in text, returns title-cased name."""
+    normalized = text.lower().replace("'", "").replace(" ", "")
+    for key, name in _BD_DISTRICTS_NORMALIZED.items():
+        if key in normalized:
+            return name.title()
+    return None
+
 # ── Bayazid specialized regex ──────────────────────────────────────────────
 _TEACH_PAT   = re.compile(r'\b(teach|explain|what\s+is|how\s+(?:does|to)|why\s+does|clarify|i\s+don\'?t\s+understand)\b')
 _QUIZ_PAT    = re.compile(r'\b(quiz|test\s+me|examine|practice\s+questions?|mcq)\b')
@@ -1050,10 +1105,11 @@ def _regex_stage(text: str) -> dict | None:
 
     # Best places / Pinning check
     if re.search(r'\b(best\s*places|tourist\s*spots|attractions|cafes|museums)\b', lower):
-        city = "Dhaka"
+        city = "Rajshahi"
         query = "tourist attraction"
-        m_city = re.search(r'(?:in|for|at)\s+([a-zA-Z\s]+)', lower)
-        if m_city: city = m_city.group(1).strip().title()
+        found_city = _find_district(lower)
+        if found_city:
+            city = found_city
         # Extract query (e.g. "best cafes in Dhaka" -> query="cafes")
         m_query = re.search(r'\b(cafes|museums|parks|restaurants|hotels)\b', lower)
         if m_query: query = m_query.group(1)
@@ -1061,24 +1117,37 @@ def _regex_stage(text: str) -> dict | None:
 
     # Weather check (before generic map)
     if _WEATHER_PAT.search(lower) and not _MAP_PAT.search(lower):
-        city = "Dhaka" # Default
-        m = re.search(r'in\s+([a-zA-Z\s]+)', lower)
-        if m: city = m.group(1).strip().title()
+        city = "Rajshahi"
+        found_city = _find_district(lower)
+        if found_city:
+            city = found_city
         return {"intent": "get_weather", "params": {"city": city}, "confidence": 1.0}
 
     # Map / Route check
     if _MAP_PAT.search(lower):
-        city = "Dhaka"
+        city = "Rajshahi"
         dest = None
         m_route = re.search(r'from\s+([a-zA-Z\s]+?)\s+to\s+([a-zA-Z\s]+)', lower)
         if m_route:
             city = m_route.group(1).strip().title()
             dest = m_route.group(2).strip().title()
         else:
-            m_city = re.search(r'(?:in|for|at)\s+([a-zA-Z\s]+)', lower)
-            if m_city: city = m_city.group(1).strip().title()
-        
-        return {"intent": "create_map", "params": {"city": city, "destination": dest}, "confidence": 1.0}
+            found_city = _find_district(lower)
+            if found_city:
+                city = found_city
+
+        # Extract numbered locations as custom pins
+        custom_pins = []
+        # Match: "1. Place Name" or "- Place Name" — skip short/garbage entries
+        pin_pattern = re.findall(r'(?:\d+\.\s*|[-•]\s*)([A-Z][a-zA-Z0-9\s\'-]+?)(?:\s*[,\n]|$)', text)
+        for p in pin_pattern[:10]:
+            name = re.sub(r'\(.*?\)', '', p).strip().rstrip('.')
+            # Skip if it's too short or looks like noise
+            if len(name) < 4 or name.lower() in ('this', 'that', 'the', 'and', 'for', 'with', 'from'):
+                continue
+            custom_pins.append({"name": name})
+
+        return {"intent": "create_map", "params": {"city": city, "destination": dest, "custom_pins": custom_pins}, "confidence": 1.0}
 
     # Bangla translator check
     if re.search(r'\b(bangla|bengali)\b', lower):

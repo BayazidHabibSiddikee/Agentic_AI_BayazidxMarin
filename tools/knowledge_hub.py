@@ -96,6 +96,9 @@ def _resolve_amenity(query: str) -> tuple[str, str]:
     e.g. 'best cafe' → ('amenity', 'cafe')
          'tourist attraction' → ('tourism', 'attraction')
     """
+    if not query or not query.strip():
+        return "amenity", "cafe"  # Default fallback
+
     lower = query.lower()
     for keyword, amenity in _AMENITY_MAP.items():
         if keyword in lower:
@@ -104,8 +107,10 @@ def _resolve_amenity(query: str) -> tuple[str, str]:
             if amenity in ("park",):
                 return "leisure", "park"
             return "amenity", amenity
+
     # Default fallback: treat the whole query as an amenity
-    return "amenity", lower.split()[-1]
+    parts = lower.split()
+    return "amenity", parts[-1] if parts else "cafe"
 
 
 def search_places_in_city(city: str, query: str = "cafe", limit: int = 8) -> list:
@@ -316,13 +321,13 @@ _WEATHER_ICONS = {
 def create_integrated_hub_map(
     city: str = "Dhaka",
     destination: str = None,
-    query: str = "cafe",       # BUG3 FIX: was 'pins' (manual list) → now auto from query
+    query: str = "cafe",
     limit: int = 8,
+    custom_pins: list = None,
 ) -> dict:
     """
-    BUG3 FIX: auto-pin places from Overpass based on `query` param.
-    Previously the caller had to manually build pin dicts — impossible from CLI.
-    Now: pass query='cafe' and it pins the top cafes in that city automatically.
+    Create an interactive map with weather, POI pins, routes, and flood data.
+    custom_pins: list of dicts with keys: name, lat, lon, description (optional)
     """
     weather = get_weather_data(city)
     if "error" in weather:
@@ -332,6 +337,54 @@ def create_integrated_hub_map(
 
     # Auto-search best places matching the query
     pins = search_places_in_city(city, query=query, limit=limit)
+
+    # ── Fallback: popular places if Overpass returns nothing ───────────────
+    if not pins and not custom_pins:
+        FALLBACK_PLACES = {
+            "rajshahi": [
+                {"name": "Padma River Bank", "lat": 24.3750, "lon": 88.6050, "address": "Rajshahi"},
+                {"name": "Varendra Research Museum", "lat": 24.3671, "lon": 88.5925, "address": "Rajshahi"},
+                {"name": "Rajshahi University", "lat": 24.3680, "lon": 88.6350, "address": "Rajshahi"},
+                {"name": "Putia Temple", "lat": 24.3800, "lon": 88.6000, "address": "Rajshahi"},
+            ],
+            "sylhet": [
+                {"name": "Hazrat Shah Jalal Mazar", "lat": 24.9070, "lon": 91.8330, "address": "Sylhet"},
+                {"name": "Ratargul Swamp Forest", "lat": 25.0830, "lon": 92.0170, "address": "Sylhet"},
+                {"name": "Jaflong", "lat": 25.1500, "lon": 92.1000, "address": "Sylhet"},
+                {"name": "Sylhet Shahi Eidgah", "lat": 24.8950, "lon": 91.8700, "address": "Sylhet"},
+            ],
+            "dhaka": [
+                {"name": "Lalbagh Fort", "lat": 23.7189, "lon": 90.3905, "address": "Dhaka"},
+                {"name": "Ahsan Manzil", "lat": 23.7085, "lon": 90.3950, "address": "Dhaka"},
+                {"name": "National Museum", "lat": 23.7380, "lon": 90.3930, "address": "Dhaka"},
+                {"name": "Sadarghat", "lat": 23.7080, "lon": 90.3870, "address": "Dhaka"},
+            ],
+            "chittagong": [
+                {"name": "Patenga Beach", "lat": 22.2200, "lon": 91.7800, "address": "Chittagong"},
+                {"name": "Fizzah Beach", "lat": 22.2500, "lon": 91.7700, "address": "Chittagong"},
+                {"name": "Bayezid Bostami Mazar", "lat": 22.3600, "lon": 91.7900, "address": "Chittagong"},
+            ],
+            "coxs bazar": [
+                {"name": "Cox's Bazar Beach", "lat": 21.4270, "lon": 92.0050, "address": "Cox's Bazar"},
+                {"name": "Himchari National Park", "lat": 21.3500, "lon": 92.0200, "address": "Cox's Bazar"},
+                {"name": "Inani Beach", "lat": 21.2800, "lon": 92.0500, "address": "Cox's Bazar"},
+            ],
+            "rangpur": [
+                {"name": "Rangpur Zoo", "lat": 25.7500, "lon": 89.2500, "address": "Rangpur"},
+                {"name": "Tajhat Palace", "lat": 25.7300, "lon": 89.2300, "address": "Rangpur"},
+            ],
+            "mymensingh": [
+                {"name": "Mymensingh Museum", "lat": 24.7500, "lon": 90.4000, "address": "Mymensingh"},
+                {"name": "Pushpo Polli", "lat": 24.7400, "lon": 90.4100, "address": "Mymensingh"},
+            ],
+            "barisal": [
+                {"name": "Durga Sagar", "lat": 22.7000, "lon": 90.3700, "address": "Barisal"},
+                {"name": "Oxford Mission Church", "lat": 22.7050, "lon": 90.3650, "address": "Barisal"},
+            ],
+        }
+        city_lower = city.lower().replace("'", "")
+        if city_lower in FALLBACK_PLACES:
+            pins = FALLBACK_PLACES[city_lower]
 
     # Build map
     m = folium.Map(
@@ -356,7 +409,39 @@ def create_integrated_hub_map(
         icon=folium.Icon(color="blue", icon="cloud"),
     ).add_to(m)
 
-    # ── Place pins (BUG3 fix: auto-populated from Overpass) ───────────────────
+    # ── Custom pins (user-specified locations) ────────────────────────────────
+    geocoded_custom = []
+    if custom_pins:
+        for pin in custom_pins:
+            lat = pin.get("lat")
+            lon = pin.get("lon")
+            name = pin.get("name", "Location")
+            desc = pin.get("description", "")
+            # Geocode if lat/lon missing
+            if not lat or not lon:
+                try:
+                    loc = _geocode(f"{name}, {city}" if city else name)
+                    if loc:
+                        lat, lon = loc.latitude, loc.longitude
+                except Exception:
+                    pass
+            if lat and lon:
+                gp = {"name": name, "lat": lat, "lon": lon, "description": desc}
+                geocoded_custom.append(gp)
+                popup_html = f"""
+                <div style="font-family:Arial;width:200px">
+                  <b>{name}</b><br>
+                  <i>{desc}</i>
+                </div>
+                """
+                folium.Marker(
+                    [lat, lon],
+                    popup=folium.Popup(popup_html, max_width=250),
+                    tooltip=name,
+                    icon=folium.Icon(color="purple", icon="map-marker"),
+                ).add_to(m)
+
+    # ── Place pins (auto-populated from Overpass) ─────────────────────────────
     for p in pins:
         popup_html = f"""
         <div style="font-family:Arial;width:180px">
@@ -411,6 +496,7 @@ def create_integrated_hub_map(
         "floods":   floods,
         "route":    route_info,
         "pins":     pins,
+        "custom_pins": geocoded_custom,
         "query":    query,
     }
 
@@ -489,17 +575,16 @@ def _fallback_search(query: str, max_results: int = 5) -> list:
         return [{"error": f"Fallback search failed: {e}"}]
 
 def _camofox_search(query: str, max_results: int = 5) -> list:
-    """Search using Camofox stealth browser via its HTTP API."""
+    """Search using Camofox stealth browser via its HTTP API (if running)."""
     try:
         CAMOFOX_URL = "http://localhost:9377"
         search_url = f"https://duckduckgo.com/?q={requests.utils.quote(query)}"
         open_res = requests.post(f"{CAMOFOX_URL}/tabs/open",
-            json={"userId": "research_hub", "url": search_url, "timeout": 30000}, timeout=35)
+            json={"userId": "research_hub", "url": search_url, "timeout": 30000}, timeout=5)
         open_data = open_res.json()
         if not open_data.get("ok"):
             return []
         tab_id = open_data["tabId"]
-        # Extract structured results via JS
         js = """
         Array.from(document.querySelectorAll('[data-result="web"] article')).slice(0,10).map(a => ({
             title: a.querySelector('h2')?.innerText || '',
@@ -514,33 +599,30 @@ def _camofox_search(query: str, max_results: int = 5) -> list:
             results = [r for r in eval_data["result"] if r.get("title")]
             if results:
                 return results[:max_results]
-    except Exception as e:
-        print(f"[Camofox] Search error: {e}")
+    except Exception:
+        pass
     return []
 
 
-def search_web(query: str, max_results: int = 5) -> list:
-    """Search the web — tries Camofox first, then DuckDuckGo, then fallback."""
+def search_web(query: str, max_results: int = 20) -> list:
+    """Search the web — tries Camofox first, then ddgs, then fallback."""
     results = _camofox_search(query, max_results)
     if results:
         return results
     try:
-        from duckduckgo_search import DDGS
-        with DDGS() as ddgs:
-            results = list(ddgs.text(query, max_results=max_results))
-            if results:
-                return results
+        from ddgs import DDGS
+        results = DDGS().text(query, max_results=max_results)
+        if results:
+            return results
     except Exception as e:
         print(f"DDG Search Error: {e}")
-    print(f"Switching to Fallback Search for: {query}")
     return _fallback_search(query, max_results)
 
 
 def search_pdfs(topic: str) -> list:
     """Specialised search for PDFs / books."""
-    # Add explicit filetype for better results
     query = f"{topic} filetype:pdf"
-    return search_web(query, max_results=10)
+    return search_web(query, max_results=20)
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────

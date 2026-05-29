@@ -38,14 +38,20 @@ HERE = Path(__file__).resolve().parent
 # ── SAFE EVAL ──────────────────────────────────────────────────────────────────
 _SAFE_BUILTINS = {
     "sin": np.sin, "cos": np.cos, "tan": np.tan,
+    "asin": np.arcsin, "acos": np.arccos, "atan": np.arctan,
+    "sinh": np.sinh, "cosh": np.cosh, "tanh": np.tanh,
     "sqrt": np.sqrt, "exp": np.exp, "log": np.log, "log10": np.log10,
     "abs": np.abs, "arcsin": np.arcsin, "arccos": np.arccos, "arctan": np.arctan,
     "pi": np.pi, "e": np.e,
+    "math": np,  # Alias math to numpy for convenience
+    "np": np,
 }
 _SAFE_GLOBALS = {"__builtins__": {}}
 
 
 def _eval_expr(expr: str, t: np.ndarray, r: float):
+    # Support both ^ and **
+    expr = expr.replace("^", "**")
     safe = {"t": t, "r": r, "np": np, **_SAFE_BUILTINS}
     val = eval(expr, _SAFE_GLOBALS, safe)
     if isinstance(val, (int, float)):

@@ -167,10 +167,12 @@ def save_news(items: list, source: str = "AlJazeera"):
     conn = get_connection()
     cursor = conn.cursor()
     for item in items:
+        # Use source from item if available, else use the provided default
+        item_source = item.get("source", source)
         cursor.execute(
             "INSERT INTO news (title, summary, analysis, source, fetched_at) VALUES (?, ?, ?, ?, ?)",
             (item.get("title", ""), item.get("summary", ""), item.get("analysis", ""),
-             source, item.get("timestamp", datetime.now().isoformat()))
+             item_source, item.get("timestamp", datetime.now().isoformat()))
         )
     conn.commit()
     conn.close()

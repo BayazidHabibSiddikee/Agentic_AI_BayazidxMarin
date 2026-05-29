@@ -9,6 +9,7 @@ vibe_state.json
 # Document & Knowledge Base
 doc/
 faiss_db/
+busi_doc/
 
 # Runtime Uploads
 static/uploads/*

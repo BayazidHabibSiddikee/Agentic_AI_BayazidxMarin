@@ -563,6 +563,26 @@ header::after {
 }
 .master-btn:hover { background: var(--j-primary); color: #000; }
 .master-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.judge-block {
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 8px;
+  padding: 16px;
+  margin: 12px 0;
+  width: 100%;
+}
+.judge-block .judge-label {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: .7rem;
+  color: var(--j-primary);
+  letter-spacing: .12em;
+  margin-bottom: 8px;
+}
+.judge-block .judge-text {
+  font-size: .85rem;
+  color: #ccc;
+  line-height: 1.6;
+}
 
 .judge-scroll {
   flex: 1;
@@ -692,7 +712,7 @@ header::after {
 </div>
 
 <!-- ── ARENA COLUMNS ────────────────────────────────────────────── -->
-<div class="arena">
+<div class="arena" id="debate-container">
 
   <!-- MARIN SIDE -->
   <div class="col-marin">
@@ -996,17 +1016,25 @@ async function startFight(isFightAgain = false) {
 async function forwardToMaster() {
   const btn = document.getElementById('send-master-btn');
   btn.disabled = true;
-  btn.textContent = '⚔ FORWARDING…';
+  btn.textContent = '⚔ EXECUTING MASTER AGENT…';
   try {
     const res = await fetch('/arena/send_master', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content: lastJudgeVerdict })
     });
-    if (res.ok) {
-      btn.textContent = '✓ VERDICT SENT';
+    const data = await res.json();
+    if (data.status === 'executed') {
+      btn.textContent = '✓ MASTER EXECUTED';
+      // Show result in a new judge-style block
+      const container = document.getElementById('debate-container');
+      const block = document.createElement('div');
+      block.className = 'judge-block';
+      block.innerHTML = `<div class="judge-label">⚙️ MASTER AGENT RESULT</div><div class="judge-text">${data.result.replace(/\n/g, '<br>')}</div>`;
+      container.appendChild(block);
+      block.scrollIntoView({ behavior: 'smooth' });
     } else {
-      btn.textContent = '✗ FAILED';
+      btn.textContent = '✗ ' + (data.error || 'FAILED');
       btn.disabled = false;
     }
   } catch (e) {
