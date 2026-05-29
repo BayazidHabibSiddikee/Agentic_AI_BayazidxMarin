@@ -12,7 +12,6 @@ faiss_db/
 busi_doc/
 
 # Runtime Uploads
-static/uploads/*
 static/generated/*
 static/screenshots/*.png
 
