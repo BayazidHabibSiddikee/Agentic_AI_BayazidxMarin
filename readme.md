@@ -36,15 +36,52 @@ Teaches, quizzes, reviews code, tracks focus sessions, and renders LaTeX math �
 | Feature | Description |
 |---|---|
 | **Deep Chat** | Direct, no-fluff technical conversation with persistent memory (last 50 messages saved to disk) |
-| **Teach Mode** | Structured explanations: concept → mechanism → working code → next step. Three depths: Quick / Standard / Deep |
-| **Quiz Engine** | AI-generated MCQ quizzes on any topic. Easy / Medium / Hard. Instant answer feedback with explanations |
+| **Research Hub** | Semantic search across academic PDF library with RAG-powered extraction |
+| **Knowledge Hub** | Topic management, interactive maps, and structured learning paths |
+| **Quiz Engine** | AI-generated MCQ quizzes on any topic. Easy / Medium / Hard. Instant answer feedback |
 | **Code Review** | Structured review: bugs → efficiency → style → improved version |
-| **Error Diagnosis** | Paste any traceback — get root cause and exact fix |
-| **Study Plans** | Week-by-week learning plans tied to hands-on project tasks |
+| **CodeFlow** | Visual architecture analysis, fragility metrics, and code health sparklines |
+| Vault Explorer | Obsidian-style private knowledge base with visual graph connections |
+| **Arena** | AI vs AI debate and judging system for complex problem solving |
 | **Focus Timer** | Named session tracker with live elapsed time, daily totals, and stats |
 | **Vision Input** | Upload circuit diagrams, schematics, code screenshots — multimodal analysis |
 | **LaTeX Rendering** | Full KaTeX support for math formulas in chat and on the landing page |
-| **Intent Classifier** | Zero-overhead regex classifier routes messages to the right handler automatically |
+
+---
+
+## Core Modules & Interfaces
+
+### 1. Unified Chat Interface
+The primary workspace where Bayazid and Marin assist with technical tasks.
+![Chat Interface](/static/uploads/chat.png)
+
+### 2. Research Hub (PDF Search)
+Search through your local PDF library using RAG. Extract insights from textbooks and papers.
+![Research Hub](/static/uploads/research_hub.png)
+
+### 3. Knowledge Hub & Mapping
+Manage learning topics and explore geospatial data through the integrated mapping engine.
+![Map Interface](/static/uploads/map.png)
+
+### 4. CodeFlow Visualization
+Visualize code health, fragility, and architecture. Track metrics over time with sparklines.
+![CodeFlow](/static/uploads/codeflow.png)
+
+### 5. Vault Explorer & Obsidian Graphs
+Explore your private knowledge vault. The Obsidian-style graph view shows connections between your thoughts.
+![Vault Graph](/static/uploads/vault_graph.png)
+
+### 6. AI Arena (Debate Mode)
+Witness Bayazid and Marin debate complex topics or judge specific technical implementations.
+![Arena Interface](/static/uploads/arena.png)
+
+### 7. Quiz & Assessment
+Test your knowledge with AI-generated quizzes. Instant feedback and detailed explanations.
+![Quiz Interface](/static/uploads/quiz.png)
+
+### 8. System Architecture
+High-level overview of the Virtual Personal Assistant (VPA) architecture.
+![VPA Architecture](/static/uploads/vpa_architecture.svg)
 
 ---
 
